@@ -96,8 +96,8 @@ fn draw_gui(fb: *limine.Framebuffer) void {
         var x: u64 = 0;
         while (x < fb.width) : (x += 1) {
             const offset = y * fb.pitch + x * bytes_per_pixel;
-            pixels[offset + 0] = @intCast(u8, (x * 255) / fb.width);
-            pixels[offset + 1] = @intCast(u8, (y * 255) / fb.height);
+            pixels[offset + 0] = @intCast((x * 255) / fb.width);
+            pixels[offset + 1] = @intCast((y * 255) / fb.height);
             pixels[offset + 2] = 0;
             if (bytes_per_pixel == 4) pixels[offset + 3] = 0;
         }
