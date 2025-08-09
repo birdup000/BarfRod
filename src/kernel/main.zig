@@ -89,7 +89,7 @@ export var limine_hhdm_request: limine.HhdmRequest linksection(".limine_reqs") =
 export var limine_framebuffer_request: limine.FramebufferRequest linksection(".limine_reqs") = .{};
 
 fn draw_gui(fb: *limine.Framebuffer) void {
-    const pixels: [*]u8 = @ptrCast([*]u8, fb.address.?);
+    const pixels: [*]u8 = @as([*]u8, @ptrCast(fb.address.?));
     const bytes_per_pixel: u64 = @as(u64, fb.bpp) / 8;
     var y: u64 = 0;
     while (y < fb.height) : (y += 1) {
