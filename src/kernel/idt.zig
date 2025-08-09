@@ -1,8 +1,9 @@
 const std = @import("std");
 const serial = @import("serial.zig");
 
-// Minimal IDT with basic exception stubs for x86_64 long mode.
-
+ // Minimal IDT with basic exception stubs for x86_64 long mode.
+ // Note: Avoid runtime calls or serial writes from naked handlers on this toolchain.
+ // Inline asm is also restricted; we will wire proper .S stubs later.
 pub const Gate = packed struct {
     offset_low: u16,
     selector: u16,

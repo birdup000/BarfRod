@@ -1,0 +1,28 @@
+# Zig build artifacts
+zig-out/
+zig-cache/
+barfrod.iso
+*.tmp*
+
+# Toolchain binaries (large files)
+toolchain/zig/
+toolchain/zig-linux-x86_64-0.12.0/
+
+# ISO root directory
+iso_root/
+
+# Debug files
+debug.log
+
+# IDE files
+.vscode/
+.idea/
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db

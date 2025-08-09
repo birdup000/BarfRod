@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+ZIG_BIN="${TOOLCHAIN_ZIG:-./toolchain/zig/zig}"
+
 # Build kernel ELF into zig-out/bin/barfrod
-echo "[barfrod] Building kernel with Zig..."
-zig build -Drelease-safe -Dstrip=false
+echo "[barfrod] Building kernel with Zig (${ZIG_BIN})..."
+"${ZIG_BIN}" build
 
 # Prepare ISO root
 ISO_DIR="iso_root"
@@ -15,13 +17,16 @@ mkdir -p "${ISO_DIR}/boot"
 mkdir -p "${ISO_DIR}/EFI/BOOT"
 mkdir -p "${LIMINE_DIR}"
 
-# Fetch Limine binaries if missing (v7.x branch binary release)
+# Fetch Limine binaries if missing (v9.6.0 binary release)
 # We use the precompiled limine-bios.sys and limine-uefi*.efi boot files for El Torito/UEFI
-if [ ! -f "${LIMINE_DIR}/limine-bios.sys" ] || [ ! -f "${LIMINE_DIR}/BOOTX64.EFI" ] || [ ! -f "${LIMINE_DIR}/limine.sys" ]; then
-  echo "[barfrod] Fetching limine prebuilt (nightly) artifacts..."
-  # Using official nightly tarball that includes needed files
-  curl -L -o /tmp/limine.tar.gz https://github.com/limine-bootloader/limine/releases/latest/download/limine-binaries.tar.gz
-  tar -xzf /tmp/limine.tar.gz -C "${LIMINE_DIR}" --strip-components=1 || true
+if [ ! -f "${LIMINE_DIR}/limine-bios.sys" ] || [ ! -f "${LIMINE_DIR}/BOOTX64.EFI" ]; then
+  echo "[barfrod] Fetching limine prebuilt (v9.6.0) artifacts..."
+  # Using official binary release that includes needed files
+  rm -rf /tmp/limine-binary
+  git clone https://github.com/limine-bootloader/limine.git --branch=v9.6.0-binary --depth=1 /tmp/limine-binary
+  cp /tmp/limine-binary/limine-bios.sys "${LIMINE_DIR}/"
+  cp /tmp/limine-binary/BOOTX64.EFI "${LIMINE_DIR}/"
+  rm -rf /tmp/limine-binary
 fi
 
 # Copy kernel and configs
@@ -49,7 +54,7 @@ if command -v xorriso &>/dev/null; then
     -b limine-bios.sys \
     -no-emul-boot -boot-load-size 4 -boot-info-table \
     --efi-boot EFI/BOOT/BOOTX64.EFI \
-    -iso-level 3 -udf -J -R \
+    -iso-level 3 -J -R \
     -o "${OUT_ISO}" "${ISO_DIR}"
   echo "[barfrod] ISO created: ${OUT_ISO}"
 else

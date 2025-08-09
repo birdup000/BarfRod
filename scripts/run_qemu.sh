@@ -2,10 +2,11 @@
 set -euo pipefail
 
 ISO="barfrod.iso"
+ZIG_BIN="${TOOLCHAIN_ZIG:-./toolchain/zig/zig}"
 
 if [ ! -f "${ISO}" ]; then
-  echo "[barfrod] ISO not found. Building ISO first..."
-  bash scripts/make_iso.sh
+  echo "[barfrod] ISO not found. Building ISO first with ${ZIG_BIN}..."
+  TOOLCHAIN_ZIG="${ZIG_BIN}" bash scripts/make_iso.sh
 fi
 
 QEMU_BIN="${QEMU_BIN:-qemu-system-x86_64}"

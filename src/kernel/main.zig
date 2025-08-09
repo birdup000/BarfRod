@@ -1,12 +1,13 @@
-// Clean header imports. Paging API is provided by src/kernel/paging.zig module.
-const std = @import("std");
+ // Clean header imports. Avoid std in freestanding root.
 const serial = @import("serial.zig");
-// Keep imports minimal; avoid std.fmt/debug to prevent pulling UBSan/rodata
-const paging_mod = @import("paging.zig");
-const setup_paging = paging_mod.setup_paging;
-const load_cr3 = paging_mod.load_cr3;
-const enable_paging_flags = paging_mod.enable_paging_flags;
+const std = @import("std");
+ // Import paging module directly as 'paging'
+const paging = @import("paging.zig");
+const setup_paging = paging.setup_paging;
+const load_cr3 = paging.load_cr3;
+const enable_paging_flags = paging.enable_paging_flags;
 const idt = @import("idt.zig");
+// keep single builtin import at top of file only
 
 // Limine boot protocol structures (minimal subset)
 const limine = struct {
@@ -69,11 +70,12 @@ const limine = struct {
     extern "limine" var _limine_framebuffer_request: FramebufferRequest;
 };
 
-// Minimal panic: avoid std/debug; just halt forever
-pub fn panic(msg: []const u8, error_return_trace: ?*anyopaque, ret_addr: ?usize) noreturn {
-    _ = msg; _ = error_return_trace; _ = ret_addr;
-    halt();
-}
+ // Minimal panic: use no stack trace type to satisfy toolchain without pulling std.* types
+ pub fn panic(msg: []const u8, error_return_trace: ?*std.builtin.StackTrace, ret_addr: ?usize) noreturn {
+     _ = msg; _ = error_return_trace; _ = ret_addr;
+     // no serial writes in panic to avoid pulling formatting/rodata
+     halt();
+ }
 
 fn halt() noreturn {
     while (true) {
