@@ -86,13 +86,21 @@ pub fn setup_paging(kernel_phys_base: u64) *[512]u64 {
 }
 
 pub fn load_cr3(pml4_phys: u64) void {
-    // Temporarily stub: do not modify CR3 on this toolchain
-    _ = pml4_phys;
+    asm volatile ("mov %[pml4], %%cr3"
+        :
+        : [pml4] "r" (pml4_phys)
+        : "memory"
+    );
 }
 
 pub fn enable_paging_flags() void {
-    // Temporarily stub CR reads/writes (no-ops)
-    const cr0: u64 = 0;
-    const cr4: u64 = 0;
-    _ = cr0; _ = cr4;
+    // Enable paging (PG bit) and protection (PE bit) in CR0
+    asm volatile (
+        \\mov %%cr0, %%rax
+        \\or $0x80000001, %%eax
+        \\mov %%rax, %%cr0
+        :
+        :
+        : "rax", "memory"
+    );
 }

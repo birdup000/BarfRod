@@ -2,14 +2,20 @@ const std = @import("std");
 
 const COM1: u16 = 0x3F8;
 
-// Temporarily stubbed serial I/O to avoid inline asm issues on snap Zig.
-// No-op implementations; restore real port I/O later.
+// Real serial I/O using inline assembly
 inline fn outb(port: u16, value: u8) void {
-    _ = port; _ = value;
+    asm volatile ("outb %[value], %[port]"
+        :
+        : [value] "{al}" (value),
+          [port] "{dx}" (port)
+    );
 }
+
 inline fn inb(port: u16) u8 {
-    _ = port;
-    return 0;
+    return asm volatile ("inb %[port], %[result]"
+        : [result] "={al}" (-> u8)
+        : [port] "{dx}" (port)
+    );
 }
 
 fn is_transmit_empty() bool {
@@ -24,6 +30,11 @@ pub fn init() void {
     outb(COM1 + 3, 0x03); // 8N1
     outb(COM1 + 2, 0xC7); // FIFO
     outb(COM1 + 4, 0x0B); // IRQs enabled, RTS/DSR set
+}
+
+// Simple test function to verify serial is working
+pub fn test_serial() void {
+    write("Serial test: OK\n");
 }
 
 pub fn write_byte(b: u8) void {

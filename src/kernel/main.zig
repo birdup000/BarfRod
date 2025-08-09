@@ -94,14 +94,18 @@ export fn _start() callconv(.C) noreturn {
     serial.init();
     serial.write("barfrod: entering kernel\n");
 
+    // Add some debugging to see if we get here
+    serial.write("barfrod: after serial init\n");
+    serial.test_serial();
+
+    // Load a minimal IDT so exceptions don't triple-fault
+    idt.init();
+
     // Establish paging with higher-half mapping (identity + higher-half)
     const pml4 = setup_paging(0);
     const pml4_phys: u64 = @as(u64, @intFromPtr(pml4));
     load_cr3(pml4_phys);
     enable_paging_flags();
-
-    // Load a minimal IDT so exceptions don't triple-fault
-    idt.init();
 
     // Avoid std formatting/prints entirely to prevent pulling UBSan/rodata
     _ = limine_bootloader_info_request;

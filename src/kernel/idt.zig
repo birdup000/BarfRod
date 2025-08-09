@@ -26,10 +26,10 @@ pub const Idtr = packed struct {
 // Initialize with zeroed gates (there is no Gate.zero method; use default literal)
 pub export var idt: IDT = .{ .gates = [_]Gate{ .{ .offset_low = 0, .selector = 0, .ist = 0, .type_attr = 0, .offset_mid = 0, .offset_high = 0, .zero = 0 } } ** 256 };
 
-pub inline fn handler_to_gate(h: *const fn () callconv(.Naked) void, ist_index: u3, dpl: u2, is_trap: bool) Gate {
+pub inline fn handler_to_gate(h: *const fn () callconv(.Naked) void, ist_index: u3, is_trap: bool) Gate {
     const addr = @intFromPtr(h);
     const typ: u8 = if (is_trap) 0xF else 0xE; // trap=0xF, interrupt=0xE
-    const attr: u8 = (1 << 7) | @as(u8, dpl) << 5 | (1 << 4) | typ; // P | DPL | 0 | type
+    const attr: u8 = (1 << 7) | (0 << 5) | (1 << 4) | typ; // P | DPL=0 | 0 | type
     return Gate{
         .offset_low = @intCast(@as(u16, @intCast(addr & 0xFFFF))),
         .selector = 0x08, // kernel code segment (assumes GDT set by bootloader; Limine sets a flat GDT)
@@ -46,26 +46,30 @@ pub fn set_gate(vec: u8, gate: Gate) void {
 }
 
 fn lidt(base: *const IDT) void {
-    _ = base; // Temporarily stub to avoid inline asm; will restore with .S helper later.
+    const idtr = Idtr{
+        .limit = @sizeOf(IDT) - 1,
+        .base = @intFromPtr(base),
+    };
+    asm volatile ("lidt (%[idtr])"
+        :
+        : [idtr] "r" (&idtr)
+        : "memory"
+    );
 }
 
 // Naked handlers: preserve minimal state and jump to a common stub that logs then halts.
 // For real kernels, you'd push error codes properly, save registers, etc.
 
-fn isr_stub_common_noerr(vec: u8) noreturn {
-    // Do not call into Zig/serial from naked/ISR context.
-    _ = vec;
-    while (true) {
-        asm volatile ("cli; hlt");
-    }
-}
-
 fn gen_naked_noerr(comptime vec: u8) fn () callconv(.Naked) void {
-    _ = vec; // silence unused parameter in this minimal naked handler
     return struct {
         fn h() callconv(.Naked) void {
-            // Naked handler must not call any Zig functions; just halt.
-            asm volatile ("cli; hlt");
+            asm volatile (
+                \\pushq $0
+                \\pushq %[vector]
+                \\jmp isr_common_stub
+                :
+                : [vector] "i" (vec)
+            );
         }
     }.h;
 }
@@ -78,14 +82,23 @@ pub fn init() void {
     }
 
     // Setup a few common exception vectors (no-error) using interrupt gates
-    set_gate(0, handler_to_gate(gen_naked_noerr(0), 0, 0, false));   // #DE
-    set_gate(1, handler_to_gate(gen_naked_noerr(1), 0, 0, false));   // #DB
-    set_gate(3, handler_to_gate(gen_naked_noerr(3), 0, 0, false));   // #BP
-    set_gate(6, handler_to_gate(gen_naked_noerr(6), 0, 0, false));   // #UD
-    set_gate(13, handler_to_gate(gen_naked_noerr(13), 0, 0, false)); // #GP
-    set_gate(14, handler_to_gate(gen_naked_noerr(14), 0, 0, false)); // #PF
+    set_gate(0, handler_to_gate(gen_naked_noerr(0), 0, false));   // #DE
+    set_gate(1, handler_to_gate(gen_naked_noerr(1), 0, false));   // #DB
+    set_gate(3, handler_to_gate(gen_naked_noerr(3), 0, false));   // #BP
+    set_gate(6, handler_to_gate(gen_naked_noerr(6), 0, false));   // #UD
+    set_gate(13, handler_to_gate(gen_naked_noerr(13), 0, false)); // #GP
+    set_gate(14, handler_to_gate(gen_naked_noerr(14), 0, false)); // #PF
 
-    // Temporarily skip loading IDT to avoid inline asm; we will add an .S helper later.
-    // lidt(&idt);
-    // serial.write("idt: loaded\n");
+    // Load the IDT
+    lidt(&idt);
+    serial.write("idt: loaded\n");
+}
+
+// Assembly stub for common ISR handling
+export fn isr_common_stub() callconv(.Naked) noreturn {
+    asm volatile (
+        \\cli
+        \\hlt
+        \\jmp isr_common_stub
+    );
 }
