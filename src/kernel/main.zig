@@ -1,6 +1,18 @@
+ // Multiboot header constants
+ const MULTIBOOT_HEADER_MAGIC: u32 = 0x1BADB002;
+ const MULTIBOOT_HEADER_FLAGS: u32 = 0x00000003;
+ const MULTIBOOT_HEADER_CHECKSUM: u32 = ~(MULTIBOOT_HEADER_MAGIC + MULTIBOOT_HEADER_FLAGS) + 1;
+ 
+ // Force Multiboot header to be at start of binary
+ export var multiboot_header align(4) linksection(".multiboot") = extern struct {
+     magic: u32 = MULTIBOOT_HEADER_MAGIC,
+     flags: u32 = MULTIBOOT_HEADER_FLAGS,
+     checksum: u32 = MULTIBOOT_HEADER_CHECKSUM,
+ }{};
+ 
  // Clean header imports. Avoid std in freestanding root.
-const serial = @import("serial.zig");
-const std = @import("std");
+ const serial = @import("serial.zig");
+ const std = @import("std");
  // Import paging module directly as 'paging'
 const paging = @import("paging.zig");
 const setup_paging = paging.setup_paging;

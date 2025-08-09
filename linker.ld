@@ -19,7 +19,13 @@ SECTIONS
 
   _kernel_start_vaddr = .;
 
-  .text : AT(1M)
+  .multiboot : AT(1M)
+  ALIGN(4)
+  {
+    KEEP(*(.multiboot))
+  } :text
+
+  .text : AT(1M + SIZEOF(.multiboot))
   ALIGN(4K)
   {
     _text_start = .;
