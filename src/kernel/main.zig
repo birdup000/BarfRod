@@ -47,9 +47,9 @@ const limine = struct {
     };
     pub const Framebuffer = extern struct {
         address: ?*anyopaque,
-        width: u16,
-        height: u16,
-        pitch: u16,
+        width: u64,
+        height: u64,
+        pitch: u64,
         bpp: u16,
         memory_model: u8,
         red_mask_size: u8,
@@ -88,6 +88,22 @@ export var limine_bootloader_info_request: limine.BootloaderInfoRequest linksect
 export var limine_hhdm_request: limine.HhdmRequest linksection(".limine_reqs") = .{};
 export var limine_framebuffer_request: limine.FramebufferRequest linksection(".limine_reqs") = .{};
 
+fn draw_gui(fb: *limine.Framebuffer) void {
+    const pixels: [*]u8 = @ptrCast([*]u8, fb.address.?);
+    const bytes_per_pixel: u64 = @as(u64, fb.bpp) / 8;
+    var y: u64 = 0;
+    while (y < fb.height) : (y += 1) {
+        var x: u64 = 0;
+        while (x < fb.width) : (x += 1) {
+            const offset = y * fb.pitch + x * bytes_per_pixel;
+            pixels[offset + 0] = @intCast(u8, (x * 255) / fb.width);
+            pixels[offset + 1] = @intCast(u8, (y * 255) / fb.height);
+            pixels[offset + 2] = 0;
+            if (bytes_per_pixel == 4) pixels[offset + 3] = 0;
+        }
+    }
+}
+
 // Entry symbol, referenced by linker
 export fn _start() callconv(.C) noreturn {
     // Initialize serial first for early logs
@@ -111,6 +127,13 @@ export fn _start() callconv(.C) noreturn {
     _ = limine_bootloader_info_request;
     _ = limine_hhdm_request;
     _ = limine_framebuffer_request;
+
+    if (limine_framebuffer_request.response) |fb_resp| {
+        if (fb_resp.framebuffer_count > 0) {
+            const fb = fb_resp.framebuffers.?[0];
+            draw_gui(fb);
+        }
+    }
 
     // With asm stubs and no I/O, just halt after minimal setup.
     halt();
