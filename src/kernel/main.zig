@@ -89,19 +89,50 @@ export var limine_hhdm_request: limine.HhdmRequest linksection(".limine_reqs") =
 export var limine_framebuffer_request: limine.FramebufferRequest linksection(".limine_reqs") = .{};
 
 fn draw_gui(fb: *limine.Framebuffer) void {
+    serial.write("barfrod: initializing framebuffer\n");
+    
+    if (fb.address == null) {
+        serial.write("barfrod: no framebuffer address\n");
+        return;
+    }
+
     const pixels: [*]u8 = @as([*]u8, @ptrCast(fb.address.?));
     const bytes_per_pixel: u64 = @as(u64, fb.bpp) / 8;
+    
+    serial.write("barfrod: framebuffer ");
+    serial.write_hex(@intFromPtr(fb.address.?));
+    serial.write(" size=");
+    serial.write_hex(fb.width);
+    serial.write("x");
+    serial.write_hex(fb.height);
+    serial.write(" bpp=");
+    serial.write_hex(fb.bpp);
+    serial.write("\n");
+
+    // Simple gradient pattern that works for RGB and BGR formats
     var y: u64 = 0;
     while (y < fb.height) : (y += 1) {
         var x: u64 = 0;
         while (x < fb.width) : (x += 1) {
             const offset = y * fb.pitch + x * bytes_per_pixel;
-            pixels[offset + 0] = @intCast((x * 255) / fb.width);
-            pixels[offset + 1] = @intCast((y * 255) / fb.height);
-            pixels[offset + 2] = 0;
+            const r = @as(u8, @intCast((x * 255) / fb.width));
+            const g = @as(u8, @intCast((y * 255) / fb.height));
+            const b = 0;
+            
+            // Handle different color formats
+            if (fb.memory_model == 1) { // RGB
+                pixels[offset + 0] = r;
+                pixels[offset + 1] = g;
+                pixels[offset + 2] = b;
+            } else { // Assume BGR
+                pixels[offset + 0] = b;
+                pixels[offset + 1] = g;
+                pixels[offset + 2] = r;
+            }
             if (bytes_per_pixel == 4) pixels[offset + 3] = 0;
         }
     }
+    serial.write("barfrod: framebuffer initialized\n");
 }
 
 // Entry symbol, referenced by linker
@@ -110,31 +141,64 @@ export fn _start() callconv(.C) noreturn {
     serial.init();
     serial.write("barfrod: entering kernel\n");
 
-    // Add some debugging to see if we get here
-    serial.write("barfrod: after serial init\n");
+    // Simple VGA text output as fallback
+    const vga = @as(*volatile [25][80]u16, @ptrFromInt(0xB8000));
+    vga[0][0] = 0x0F00 | 'B';
+    vga[0][1] = 0x0F00 | 'A';
+    vga[0][2] = 0x0F00 | 'R';
+    vga[0][3] = 0x0F00 | 'F';
+
+    // Verify serial working
+    serial.write("barfrod: testing serial...\n");
     serial.test_serial();
+    serial.write("barfrod: serial test complete\n");
 
-    // Load a minimal IDT so exceptions don't triple-fault
+    // Load IDT
+    serial.write("barfrod: initializing IDT...\n");
     idt.init();
+    serial.write("barfrod: IDT initialized\n");
 
-    // Establish paging with higher-half mapping (identity + higher-half)
+    // Set up paging
+    serial.write("barfrod: setting up paging...\n");
     const pml4 = setup_paging(0);
     const pml4_phys: u64 = @as(u64, @intFromPtr(pml4));
     load_cr3(pml4_phys);
     enable_paging_flags();
+    serial.write("barfrod: paging enabled\n");
 
     // Avoid std formatting/prints entirely to prevent pulling UBSan/rodata
     _ = limine_bootloader_info_request;
     _ = limine_hhdm_request;
     _ = limine_framebuffer_request;
 
-    if (limine_framebuffer_request.response) |fb_resp| {
-        if (fb_resp.framebuffer_count > 0) {
+    serial.write("barfrod: checking framebuffer...\n");
+    if (limine_framebuffer_request.response == null) {
+        serial.write("barfrod: no framebuffer response from bootloader\n");
+    } else {
+        const fb_resp = limine_framebuffer_request.response.?;
+        serial.write("barfrod: framebuffer response revision ");
+        serial.write_hex(fb_resp.revision);
+        serial.write("\n");
+
+        if (fb_resp.framebuffer_count == 0) {
+            serial.write("barfrod: no framebuffers available\n");
+        } else if (fb_resp.framebuffers == null) {
+            serial.write("barfrod: framebuffers pointer is null\n");
+        } else {
             const fb = fb_resp.framebuffers.?[0];
-            draw_gui(fb);
+            if (fb.address == null) {
+                serial.write("barfrod: framebuffer address is null\n");
+            } else {
+                draw_gui(fb);
+                serial.write("barfrod: framebuffer initialized successfully\n");
+            }
         }
     }
 
-    // With asm stubs and no I/O, just halt after minimal setup.
-    halt();
+    serial.write("barfrod: entering main loop\n");
+    
+    // Main kernel loop
+    while (true) {
+        asm volatile ("pause");
+    }
 }

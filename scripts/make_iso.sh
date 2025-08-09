@@ -9,53 +9,41 @@ echo "[barfrod] Building kernel with Zig (${ZIG_BIN})..."
 
 # Prepare ISO root
 ISO_DIR="iso_root"
-LIMINE_DIR="third_party/limine"
 KERNEL_ELF="zig-out/bin/barfrod"
 OUT_ISO="barfrod.iso"
 
-mkdir -p "${ISO_DIR}/boot"
+mkdir -p "${ISO_DIR}/boot/grub"
 mkdir -p "${ISO_DIR}/EFI/BOOT"
-mkdir -p "${LIMINE_DIR}"
 
-# Fetch Limine binaries if missing (v9.6.0 binary release)
-# We use the precompiled limine-bios.sys and limine-uefi*.efi boot files for El Torito/UEFI
-if [ ! -f "${LIMINE_DIR}/limine-bios.sys" ] || [ ! -f "${LIMINE_DIR}/BOOTX64.EFI" ]; then
-  echo "[barfrod] Fetching limine prebuilt (v9.6.0) artifacts..."
-  # Using official binary release that includes needed files
-  rm -rf /tmp/limine-binary
-  git clone https://github.com/limine-bootloader/limine.git --branch=v9.6.0-binary --depth=1 /tmp/limine-binary
-  cp /tmp/limine-binary/limine-bios.sys "${LIMINE_DIR}/"
-  cp /tmp/limine-binary/BOOTX64.EFI "${LIMINE_DIR}/"
-  rm -rf /tmp/limine-binary
-fi
-
-# Copy kernel and configs
+# Copy kernel and GRUB config
 cp "${KERNEL_ELF}" "${ISO_DIR}/boot/barfrod.elf"
-cp limine.cfg "${ISO_DIR}/limine.cfg"
+cp grub.cfg "${ISO_DIR}/boot/grub/grub.cfg"
 
-# Copy Limine boot files (both BIOS and UEFI support on ISO)
-# Files may be named differently depending on tarball; support common names
-copy_if_exists() {
-  local src="$1"
-  local dst="$2"
-  if [ -f "$src" ]; then cp "$src" "$dst"; fi
+# Check dependencies
+check_dep() {
+  if ! command -v "$1" &>/dev/null; then
+    echo "Error: Required tool '$1' not found."
+    echo "Please install these packages:"
+    echo "  mtools dosfstools grub-pc-bin grub-efi-amd64-bin"
+    echo "On Debian/Ubuntu run:"
+    echo "  sudo apt-get install mtools dosfstools grub-pc-bin grub-efi-amd64-bin"
+    exit 1
+  fi
 }
 
-copy_if_exists "${LIMINE_DIR}/limine-bios.sys" "${ISO_DIR}/limine-bios.sys"
-copy_if_exists "${LIMINE_DIR}/limine.sys" "${ISO_DIR}/limine.sys"
-# UEFI bootloader
-copy_if_exists "${LIMINE_DIR}/BOOTX64.EFI" "${ISO_DIR}/EFI/BOOT/BOOTX64.EFI"
-copy_if_exists "${LIMINE_DIR}/BOOTIA32.EFI" "${ISO_DIR}/EFI/BOOT/BOOTIA32.EFI"
+check_dep "grub-mkrescue"
+check_dep "mformat"
 
-# Create ISO (requires xorriso or genisoimage + isohybrid)
+# Create ISO with GRUB
 echo "[barfrod] Creating ISO..."
-if command -v xorriso &>/dev/null; then
-  xorriso -as mkisofs \
-    -b limine-bios.sys \
-    -no-emul-boot -boot-load-size 4 -boot-info-table \
-    --efi-boot EFI/BOOT/BOOTX64.EFI \
-    -iso-level 3 -J -R \
-    -o "${OUT_ISO}" "${ISO_DIR}"
+grub-mkrescue -o "${OUT_ISO}" "${ISO_DIR}" || {
+  echo "Error: ISO creation failed"
+  echo "Common issues:"
+  echo "1. Missing dependencies (see above)"
+  echo "2. Need sudo permissions for some operations"
+  exit 1
+}
+if [ -f "${OUT_ISO}" ]; then
   echo "[barfrod] ISO created: ${OUT_ISO}"
 else
   echo "xorriso not found. Please install xorriso (or genisoimage + isohybrid) and rerun." >&2
