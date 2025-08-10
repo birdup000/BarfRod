@@ -172,7 +172,7 @@ The kernel provides extensive serial logging. To capture debug output:
 
 ## 📜 License
 
-This project is released under the MIT License. See the LICENSE file for details.
+Haven't decided which license to put... Will add one soon. 
 
 ## 🙏 Acknowledgments
 
