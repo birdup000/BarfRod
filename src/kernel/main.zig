@@ -1,85 +1,58 @@
- // Multiboot header constants
- const MULTIBOOT_HEADER_MAGIC: u32 = 0x1BADB002;
- const MULTIBOOT_HEADER_FLAGS: u32 = 0x00000003;
- const MULTIBOOT_HEADER_CHECKSUM: u32 = ~(MULTIBOOT_HEADER_MAGIC + MULTIBOOT_HEADER_FLAGS) + 1;
- 
- // Force Multiboot header to be at start of binary
- export var multiboot_header align(4) linksection(".multiboot") = extern struct {
-     magic: u32 = MULTIBOOT_HEADER_MAGIC,
-     flags: u32 = MULTIBOOT_HEADER_FLAGS,
-     checksum: u32 = MULTIBOOT_HEADER_CHECKSUM,
- }{};
- 
- // Clean header imports. Avoid std in freestanding root.
- const serial = @import("serial.zig");
- const std = @import("std");
- // Import paging module directly as 'paging'
+// Multiboot header constants
+const MULTIBOOT_HEADER_MAGIC: u32 = 0x1BADB002;
+const MULTIBOOT_HEADER_FLAGS: u32 = 0x00000003;
+const MULTIBOOT_HEADER_CHECKSUM: u32 = ~(MULTIBOOT_HEADER_MAGIC + MULTIBOOT_HEADER_FLAGS) + 1;
+
+// Force Multiboot header to be at start of binary
+export var multiboot_header align(4) linksection(".multiboot") = extern struct {
+    magic: u32 = MULTIBOOT_HEADER_MAGIC,
+    flags: u32 = MULTIBOOT_HEADER_FLAGS,
+    checksum: u32 = MULTIBOOT_HEADER_CHECKSUM,
+}{};
+
+// Clean header imports. Avoid std in freestanding root.
+const serial = @import("serial.zig");
+const std = @import("std");
+// Import paging module directly as 'paging'
 const paging = @import("paging.zig");
 const setup_paging = paging.setup_paging;
 const load_cr3 = paging.load_cr3;
 const enable_paging_flags = paging.enable_paging_flags;
 const idt = @import("idt.zig");
+const cli = @import("cli.zig");
+const vga = @import("vga.zig");
 // keep single builtin import at top of file only
 
-// Limine boot protocol structures (minimal subset)
-const limine = struct {
-    pub const RequestHeader = extern struct {
-        id: u64,
-        revision: u64 = 0,
-        response: ?*anyopaque = null,
-    };
-
-    pub const BootloaderInfoRequest = extern struct {
-        header: RequestHeader = .{ .id = 0x18ad3fbd3ad94a5, .revision = 0 },
-        response: ?*BootloaderInfoResponse = null,
-    };
-    pub const BootloaderInfoResponse = extern struct {
-        revision: u64,
-        name: ?[*:0]const u8,
-        version: ?[*:0]const u8,
-    };
-
-    pub const HhdmRequest = extern struct {
-        header: RequestHeader = .{ .id = 0x48dcf1cb8ad2c0f4, .revision = 0 },
-        response: ?*HhdmResponse = null,
-    };
-    pub const HhdmResponse = extern struct {
-        revision: u64,
-        offset: u64,
-    };
-
-    pub const FramebufferRequest = extern struct {
-        header: RequestHeader = .{ .id = 0xcbfe81d7c1f59d4, .revision = 0 },
-        response: ?*FramebufferResponse = null,
-    };
-    pub const FramebufferResponse = extern struct {
-        revision: u64,
-        framebuffer_count: u64,
-        framebuffers: ?[*]*Framebuffer,
-    };
-    pub const Framebuffer = extern struct {
-        address: ?*anyopaque,
-        width: u64,
-        height: u64,
-        pitch: u64,
-        bpp: u16,
-        memory_model: u8,
-        red_mask_size: u8,
-        red_mask_shift: u8,
-        green_mask_size: u8,
-        green_mask_shift: u8,
-        blue_mask_size: u8,
-        blue_mask_shift: u8,
-        unused: u8,
-        edid: ?*anyopaque,
-        edid_size: u64,
-        mode_count: u64,
-        modes: ?*anyopaque,
-    };
-
-    extern "limine" var _limine_bootloader_info_request: BootloaderInfoRequest;
-    extern "limine" var _limine_hhdm_request: HhdmRequest;
-    extern "limine" var _limine_framebuffer_request: FramebufferRequest;
+// Multiboot info structure for GRUB
+const MultibootInfo = extern struct {
+    flags: u32,
+    mem_lower: u32,
+    mem_upper: u32,
+    boot_device: u32,
+    cmdline: u32,
+    mods_count: u32,
+    mods_addr: u32,
+    syms: [4]u32,
+    mmap_length: u32,
+    mmap_addr: u32,
+    drives_length: u32,
+    drives_addr: u32,
+    config_table: u32,
+    boot_loader_name: u32,
+    apm_table: u32,
+    vbe_control_info: u32,
+    vbe_mode_info: u32,
+    vbe_mode: u16,
+    vbe_interface_seg: u16,
+    vbe_interface_off: u16,
+    vbe_interface_len: u16,
+    framebuffer_addr: u64,
+    framebuffer_pitch: u32,
+    framebuffer_width: u32,
+    framebuffer_height: u32,
+    framebuffer_bpp: u8,
+    framebuffer_type: u8,
+    color_info: u8,
 };
 
  // Minimal panic: use no stack trace type to satisfy toolchain without pulling std.* types
@@ -89,86 +62,56 @@ const limine = struct {
      halt();
  }
 
+ // Simple delay function (waits for approximately the specified number of seconds)
+ fn delay_seconds(seconds: u32) void {
+     // This is a very rough approximation - in a real kernel you'd use a timer
+     var i: u32 = 0;
+     while (i < seconds * 1000000) : (i += 1) {
+         // Small delay loop
+         asm volatile ("nop");
+     }
+ }
+
 fn halt() noreturn {
     while (true) {
         asm volatile ("cli; hlt");
     }
 }
 
-// Limine requests storage: the linker will place these in a special section when referenced
-export var limine_bootloader_info_request: limine.BootloaderInfoRequest linksection(".limine_reqs") = .{};
-export var limine_hhdm_request: limine.HhdmRequest linksection(".limine_reqs") = .{};
-export var limine_framebuffer_request: limine.FramebufferRequest linksection(".limine_reqs") = .{};
-
-fn draw_gui(fb: *limine.Framebuffer) void {
-    serial.write("barfrod: initializing framebuffer\n");
-    
-    if (fb.address == null) {
-        serial.write("barfrod: no framebuffer address\n");
-        return;
-    }
-
-    const pixels: [*]u8 = @as([*]u8, @ptrCast(fb.address.?));
-    const bytes_per_pixel: u64 = @as(u64, fb.bpp) / 8;
-    
-    serial.write("barfrod: framebuffer ");
-    serial.write_hex(@intFromPtr(fb.address.?));
-    serial.write(" size=");
-    serial.write_hex(fb.width);
-    serial.write("x");
-    serial.write_hex(fb.height);
-    serial.write(" bpp=");
-    serial.write_hex(fb.bpp);
-    serial.write("\n");
-
-    // Simple gradient pattern that works for RGB and BGR formats
-    var y: u64 = 0;
-    while (y < fb.height) : (y += 1) {
-        var x: u64 = 0;
-        while (x < fb.width) : (x += 1) {
-            const offset = y * fb.pitch + x * bytes_per_pixel;
-            const r = @as(u8, @intCast((x * 255) / fb.width));
-            const g = @as(u8, @intCast((y * 255) / fb.height));
-            const b = 0;
-            
-            // Handle different color formats
-            if (fb.memory_model == 1) { // RGB
-                pixels[offset + 0] = r;
-                pixels[offset + 1] = g;
-                pixels[offset + 2] = b;
-            } else { // Assume BGR
-                pixels[offset + 0] = b;
-                pixels[offset + 1] = g;
-                pixels[offset + 2] = r;
-            }
-            if (bytes_per_pixel == 4) pixels[offset + 3] = 0;
-        }
-    }
-    serial.write("barfrod: framebuffer initialized\n");
-}
-
 // Entry symbol, referenced by linker
 export fn _start() callconv(.C) noreturn {
     // Initialize serial first for early logs
     serial.init();
+    serial.write("barfrod: serial initialized\n");
     serial.write("barfrod: entering kernel\n");
 
     // Simple VGA text output as fallback
-    const vga = @as(*volatile [25][80]u16, @ptrFromInt(0xB8000));
-    vga[0][0] = 0x0F00 | 'B';
-    vga[0][1] = 0x0F00 | 'A';
-    vga[0][2] = 0x0F00 | 'R';
-    vga[0][3] = 0x0F00 | 'F';
+    vga.vga_buffer[0][0] = vga.VGA_COLOR | 'B';
+    vga.vga_buffer[0][1] = vga.VGA_COLOR | 'A';
+    vga.vga_buffer[0][2] = vga.VGA_COLOR | 'R';
+    vga.vga_buffer[0][3] = vga.VGA_COLOR | 'F';
+    
+    // Clear rest of first line
+    var col: usize = 4;
+    while (col < 80) : (col += 1) {
+        vga.vga_buffer[0][col] = vga.VGA_COLOR | ' ';
+    }
+    
+    serial.write("barfrod: VGA text output set\n");
 
     // Verify serial working
     serial.write("barfrod: testing serial...\n");
     serial.test_serial();
     serial.write("barfrod: serial test complete\n");
+    
+    serial.write("barfrod: about to initialize IDT\n");
 
     // Load IDT
     serial.write("barfrod: initializing IDT...\n");
     idt.init();
     serial.write("barfrod: IDT initialized\n");
+    
+    serial.write("barfrod: about to set up paging\n");
 
     // Set up paging
     serial.write("barfrod: setting up paging...\n");
@@ -177,40 +120,23 @@ export fn _start() callconv(.C) noreturn {
     load_cr3(pml4_phys);
     enable_paging_flags();
     serial.write("barfrod: paging enabled\n");
-
-    // Avoid std formatting/prints entirely to prevent pulling UBSan/rodata
-    _ = limine_bootloader_info_request;
-    _ = limine_hhdm_request;
-    _ = limine_framebuffer_request;
-
-    serial.write("barfrod: checking framebuffer...\n");
-    if (limine_framebuffer_request.response == null) {
-        serial.write("barfrod: no framebuffer response from bootloader\n");
-    } else {
-        const fb_resp = limine_framebuffer_request.response.?;
-        serial.write("barfrod: framebuffer response revision ");
-        serial.write_hex(fb_resp.revision);
-        serial.write("\n");
-
-        if (fb_resp.framebuffer_count == 0) {
-            serial.write("barfrod: no framebuffers available\n");
-        } else if (fb_resp.framebuffers == null) {
-            serial.write("barfrod: framebuffers pointer is null\n");
-        } else {
-            const fb = fb_resp.framebuffers.?[0];
-            if (fb.address == null) {
-                serial.write("barfrod: framebuffer address is null\n");
-            } else {
-                draw_gui(fb);
-                serial.write("barfrod: framebuffer initialized successfully\n");
-            }
-        }
-    }
+    
+    serial.write("barfrod: kernel initialization complete\n");
 
     serial.write("barfrod: entering main loop\n");
     
-    // Main kernel loop
-    while (true) {
-        asm volatile ("pause");
-    }
+    // Wait 6 seconds before entering CLI
+    serial.write("barfrod: waiting 6 seconds before CLI...\n");
+    delay_seconds(6);
+    serial.write("barfrod: entering CLI\n");
+    
+    // Initialize VGA for CLI
+    vga.vga_clear();
+    vga.vga_write("Kernel initialized successfully!\n");
+    
+    // Run interactive CLI
+    cli.run_cli();
+    
+    // Should never reach here
+    halt();
 }

@@ -47,9 +47,6 @@ SECTIONS
   {
     _data_start = .;
     *(.data .data.*)
-    /* Place Limine requests in the data section at a fixed offset */
-    . = ALIGN(4K);
-    KEEP(*(.limine_reqs))
     _data_end = .;
   } :data
 

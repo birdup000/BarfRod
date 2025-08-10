@@ -1,4 +1,5 @@
 const std = @import("std");
+const kheap = @import("kheap.zig");
 
 const COM1: u16 = 0x3F8;
 
@@ -22,6 +23,19 @@ fn is_transmit_empty() bool {
     return (inb(COM1 + 5) & 0x20) != 0;
 }
 
+// Check if data is available to read
+pub fn is_data_available() bool {
+    return (inb(COM1 + 5) & 0x01) != 0;
+}
+
+// Read a byte from serial port
+pub fn read_byte() u8 {
+    while (!is_data_available()) {
+        // Wait for data to be available
+    }
+    return inb(COM1);
+}
+
 pub fn init() void {
     outb(COM1 + 1, 0x00); // disable interrupts
     outb(COM1 + 3, 0x80); // DLAB on
@@ -30,6 +44,21 @@ pub fn init() void {
     outb(COM1 + 3, 0x03); // 8N1
     outb(COM1 + 2, 0xC7); // FIFO
     outb(COM1 + 4, 0x0B); // IRQs enabled, RTS/DSR set
+}
+
+// Read a line from serial input (null-terminated string)
+pub fn read_line(buffer: []u8) usize {
+    var i: usize = 0;
+    while (i < buffer.len - 1) {
+        const ch = read_byte();
+        if (ch == '\r' or ch == '\n') {
+            break;
+        }
+        buffer[i] = ch;
+        i += 1;
+    }
+    buffer[i] = 0; // null terminate
+    return i;
 }
 
 // Simple test function to verify serial is working

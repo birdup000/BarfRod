@@ -1,0 +1,20 @@
+[barfrod] Building kernel with Zig (./toolchain/zig/zig)...
+[barfrod] Creating ISO...
+xorriso 1.5.6 : RockRidge filesystem manipulator, libburnia project.
+
+Drive current: -outdev 'stdio:barfrod.iso'
+Media current: stdio file, overwriteable
+Media status : is blank
+Media summary: 0 sessions, 0 data blocks, 0 data,  684g free
+Added to ISO image: directory '/'='/tmp/grub.KSNdvw'
+xorriso : UPDATE :     596 files added in 1 seconds
+Added to ISO image: directory '/'='/home/bird/Desktop/hotwordbees/BarfRod/iso_root'
+xorriso : UPDATE :     602 files added in 1 seconds
+xorriso : NOTE : Copying to System Area: 512 bytes from file '/usr/lib/grub/i386-pc/boot_hybrid.img'
+ISO image produced: 6019 sectors
+Written to medium : 6019 sectors at LBA 0
+Writing to 'stdio:barfrod.iso' completed successfully.
+
+[barfrod] ISO created: barfrod.iso
+[barfrod] Done.
+[barfrod] Running QEMU...

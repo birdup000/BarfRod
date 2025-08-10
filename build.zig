@@ -59,7 +59,7 @@ pub fn build(b: *std.Build) void {
     // Keep iso step depending on install, which depends on this env step implicitly
 
     // ISO creation
-    const iso_step = b.step("iso", "Build a bootable ISO image with Limine");
+    const iso_step = b.step("iso", "Build a bootable ISO image with GRUB");
     const iso_cmd = b.addSystemCommand(&.{
         "bash", "scripts/make_iso.sh",
     });
@@ -67,7 +67,7 @@ pub fn build(b: *std.Build) void {
     iso_step.dependOn(&iso_cmd.step);
 
     // Run in QEMU
-    const run_step = b.step("run", "Run kernel in QEMU (uses ISO and Limine)");
+    const run_step = b.step("run", "Run kernel in QEMU (uses ISO and GRUB)");
     const run_cmd = b.addSystemCommand(&.{
         "bash", "scripts/run_qemu.sh",
     });
@@ -75,7 +75,7 @@ pub fn build(b: *std.Build) void {
     run_step.dependOn(&run_cmd.step);
 
     // Clean artifacts helper
-    const clean_step = b.step("clean-artifacts", "Clean build artifacts (zig-out, iso, limine dir)");
+    const clean_step = b.step("clean-artifacts", "Clean build artifacts (zig-out, iso)");
     const clean_cmd = b.addSystemCommand(&.{
         "bash", "scripts/clean.sh",
     });
