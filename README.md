@@ -7,7 +7,7 @@ BarfRod is a modern x86_64 kernel written in Zig, featuring multiboot compliance
 - **Multiboot-compliant**: Boots reliably with GRUB using proper multiboot headers
 - **Memory Management**: Physical memory manager and kernel heap allocator
 - **Task Scheduling**: Preemptive multitasking with context switching
-- **Interactive CLI**: Built-in command-line interface for kernel interaction
+- ~~**Interactive CLI**: Built-in command-line interface for kernel interaction~~ (In Progress)
 - **VGA Text Mode**: Basic text output for debugging and user interface
 - **Serial Output**: Comprehensive serial logging for development and debugging
 - **IDT Support**: Interrupt descriptor table setup and management
