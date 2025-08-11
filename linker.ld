@@ -19,13 +19,18 @@ SECTIONS
 
   _kernel_start_vaddr = .;
 
+  /* Multiboot header must be at exactly 1MiB */
   .multiboot : AT(1M)
   ALIGN(4)
   {
     KEEP(*(.multiboot))
+    /* Ensure section is at least 12 bytes (multiboot header size) */
+    . = ALIGN(4);
+    LONG(0); /* Padding to ensure size */
   } :text
 
-  .text : AT(1M + SIZEOF(.multiboot))
+  /* Start text section immediately after 1MiB + multiboot header */
+  .text : AT(1M + 12) /* Explicit offset instead of SIZEOF */
   ALIGN(4K)
   {
     _text_start = .;
