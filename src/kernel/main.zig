@@ -1,3 +1,16 @@
+// New main kernel entry point with redesigned architecture
+const std = @import("std");
+
+// Import redesigned kernel components
+const arch = @import("arch.zig");
+const pmm = @import("pmm.zig");
+const vmm = @import("vmm.zig");
+const process = @import("process.zig");
+const interrupts = @import("interrupts.zig");
+const syscall = @import("syscall.zig");
+const serial = @import("serial.zig");
+const vga = @import("vga.zig");
+
 // Multiboot header constants
 const MULTIBOOT_HEADER_MAGIC: u32 = 0x1BADB002;
 const MULTIBOOT_HEADER_FLAGS: u32 = 0x00000003;
@@ -10,20 +23,7 @@ export var multiboot_header align(4) linksection(".multiboot") = extern struct {
     checksum: u32 = MULTIBOOT_HEADER_CHECKSUM,
 }{};
 
-// Clean header imports. Avoid std in freestanding root.
-const serial = @import("serial.zig");
-const std = @import("std");
-// Import paging module directly as 'paging'
-const paging = @import("paging.zig");
-const setup_paging = paging.setup_paging;
-const load_cr3 = paging.load_cr3;
-const enable_paging_flags = paging.enable_paging_flags;
-const idt = @import("idt.zig");
-const cli = @import("cli.zig");
-const vga = @import("vga.zig");
-// keep single builtin import at top of file only
-
-// Multiboot info structure for GRUB
+// Multiboot info structure
 const MultibootInfo = extern struct {
     flags: u32,
     mem_lower: u32,
@@ -55,88 +55,499 @@ const MultibootInfo = extern struct {
     color_info: u8,
 };
 
- // Minimal panic: use no stack trace type to satisfy toolchain without pulling std.* types
- pub fn panic(msg: []const u8, error_return_trace: ?*std.builtin.StackTrace, ret_addr: ?usize) noreturn {
-     _ = msg; _ = error_return_trace; _ = ret_addr;
-     // no serial writes in panic to avoid pulling formatting/rodata
-     halt();
- }
+// Memory map entry
+const MultibootMmapEntry = extern struct {
+    size: u32,
+    base_addr: u64,
+    length: u64,
+    type: u32,
+};
 
- // Simple delay function (waits for approximately the specified number of seconds)
- fn delay_seconds(seconds: u32) void {
-     // This is a very rough approximation - in a real kernel you'd use a timer
-     var i: u32 = 0;
-     while (i < seconds * 1000000) : (i += 1) {
-         // Small delay loop
-         asm volatile ("nop");
-     }
- }
+// Global kernel state
+var kernel_initialized: bool = false;
+var multiboot_info: ?*const MultibootInfo = null;
+var memory_map: pmm.MemoryMap = undefined;
+var memory_regions: [32]pmm.MemoryRegion = undefined;
 
-fn halt() noreturn {
+// Panic handler
+pub fn panic(msg: []const u8, error_return_trace: ?*std.builtin.StackTrace, ret_addr: ?usize) noreturn {
+    _ = error_return_trace;
+    _ = ret_addr;
+    
+    serial.write("KERNEL PANIC: ");
+    serial.write(msg);
+    serial.write("\n");
+    
+    // Dump registers if possible
+    if (kernel_initialized) {
+        const manager = process.get_manager();
+        if (manager.current_process) |current| {
+            serial.write("Current process: ");
+            serial.write_hex(@as(u64, current.id));
+            serial.write("\n");
+        }
+    }
+    
+    // Halt the system
     while (true) {
-        asm volatile ("cli; hlt");
+        arch.halt();
     }
 }
 
-// Entry symbol, referenced by linker
-export fn _start() callconv(.C) noreturn {
-    // Initialize serial first for early logs
-    serial.init();
-    serial.write("barfrod: serial initialized\n");
-    serial.write("barfrod: entering kernel\n");
-
-    // Simple VGA text output as fallback
-    vga.vga_buffer[0][0] = vga.VGA_COLOR | 'B';
-    vga.vga_buffer[0][1] = vga.VGA_COLOR | 'A';
-    vga.vga_buffer[0][2] = vga.VGA_COLOR | 'R';
-    vga.vga_buffer[0][3] = vga.VGA_COLOR | 'F';
+// Simple delay function
+fn delay_microseconds(us: u64) void {
+    const start = arch.read_msr(0x10); // TSC
+    const end = start + us * 1000; // Rough approximation
     
-    // Clear rest of first line
-    var col: usize = 4;
-    while (col < 80) : (col += 1) {
-        vga.vga_buffer[0][col] = vga.VGA_COLOR | ' ';
+    while (arch.read_msr(0x10) < end) {
+        arch.pause();
+    }
+}
+
+fn delay_seconds(seconds: u64) void {
+    var i: u64 = 0;
+    while (i < seconds) : (i += 1) {
+        delay_microseconds(1000000);
+    }
+}
+
+// Initialize serial port
+fn init_serial() void {
+    serial.init();
+    serial.write("BarfRod Kernel v2.0 - Redesigned Architecture\n");
+    serial.write("==========================================\n");
+}
+
+// Initialize VGA
+fn init_vga() void {
+    vga.vga_clear();
+    vga.vga_write("BarfRod Kernel v2.0\n");
+    vga.vga_write("Redesigned Architecture\n");
+    vga.vga_write("========================\n");
+}
+
+// Parse memory map from multiboot info
+fn parse_memory_map(info: *const MultibootInfo) void {
+    var region_count: usize = 0;
+    
+    if ((info.flags & (1 << 6)) != 0) {
+        // Memory map is available
+        const mmap_addr = @as([*]u8, @ptrFromInt(info.mmap_addr));
+        var offset: usize = 0;
+        
+        while (offset < info.mmap_length) {
+            const entry = @as(*const MultibootMmapEntry, @alignCast(@ptrCast(mmap_addr + offset)));
+            
+            if (region_count < memory_regions.len) {
+                memory_regions[region_count] = .{
+                    .base = entry.base_addr,
+                    .length = entry.length,
+                    .type = switch (entry.type) {
+                        1 => .Usable,
+                        2 => .Reserved,
+                        3 => .ACPIReclaim,
+                        4 => .ACPINVS,
+                        5 => .BadMemory,
+                        else => .Reserved,
+                    },
+                    .padding = 0,
+                };
+                region_count += 1;
+            }
+            
+            offset += entry.size + 4;
+        }
+    } else {
+        // No memory map, use basic memory info
+        if ((info.flags & (1 << 0)) != 0) {
+            // Basic memory info is available
+            const lower_mem = @as(u64, info.mem_lower) * 1024;
+            const upper_mem = @as(u64, info.mem_upper) * 1024;
+            
+            // Add lower memory
+            if (region_count < memory_regions.len) {
+                memory_regions[region_count] = .{
+                    .base = 0,
+                    .length = lower_mem,
+                    .type = .Usable,
+                    .padding = 0,
+                };
+                region_count += 1;
+            }
+            
+            // Add upper memory
+            if (region_count < memory_regions.len) {
+                memory_regions[region_count] = .{
+                    .base = 0x100000,
+                    .length = upper_mem,
+                    .type = .Usable,
+                    .padding = 0,
+                };
+                region_count += 1;
+            }
+        }
     }
     
-    serial.write("barfrod: VGA text output set\n");
+    // Create memory map
+    memory_map = pmm.MemoryMap.init(&memory_regions, region_count);
+    
+    serial.write("memory: parsed ");
+    serial.write_hex(@as(u64, region_count));
+    serial.write(" memory regions\n");
+}
 
-    // Verify serial working
-    serial.write("barfrod: testing serial...\n");
-    serial.test_serial();
-    serial.write("barfrod: serial test complete\n");
+// Initialize physical memory manager
+fn init_pmm() void {
+    pmm.init();
+    pmm.get_instance().setup(memory_map);
     
-    serial.write("barfrod: about to initialize IDT\n");
+    const stats = pmm.get_instance().get_stats();
+    serial.write("pmm: ");
+    serial.write_hex(@as(u64, stats.total_pages));
+    serial.write(" total pages, ");
+    serial.write_hex(@as(u64, stats.free_pages));
+    serial.write(" free pages\n");
+}
 
-    // Load IDT
-    serial.write("barfrod: initializing IDT...\n");
-    idt.init();
-    serial.write("barfrod: IDT initialized\n");
-    
-    serial.write("barfrod: about to set up paging\n");
+// Initialize virtual memory manager
+fn init_vmm() !void {
+    vmm.init() catch {};
+    serial.write("vmm: virtual memory manager initialized\n");
+}
 
-    // Set up paging
-    serial.write("barfrod: setting up paging...\n");
-    const pml4 = setup_paging(0);
-    const pml4_phys: u64 = @as(u64, @intFromPtr(pml4));
-    load_cr3(pml4_phys);
-    enable_paging_flags();
-    serial.write("barfrod: paging enabled\n");
+// Initialize interrupts
+fn init_interrupts() void {
+    interrupts.init();
+    interrupts.init_pic();
     
-    serial.write("barfrod: kernel initialization complete\n");
+    // Enable timer interrupt
+    interrupts.enable_irq(0);
+    
+    // Enable keyboard interrupt
+    interrupts.enable_irq(1);
+    
+    // Enable serial interrupt
+    interrupts.enable_irq(4);
+    
+    serial.write("interrupts: interrupt system initialized\n");
+}
 
-    serial.write("barfrod: entering main loop\n");
+// Initialize process manager
+fn init_process_manager() !void {
+    _ = process.init();
+    serial.write("process: process manager initialized\n");
+}
+
+// Initialize system call interface
+fn init_syscall() void {
+    syscall.init();
+    serial.write("syscall: system call interface initialized\n");
+}
+
+// Initialize kernel heap
+fn init_heap() void {
+    // The heap is now managed by the PMM and VMM
+    serial.write("heap: kernel heap initialized\n");
+}
+
+// Initialize GDT
+fn init_gdt() void {
+    // TODO: Implement GDT initialization
+    serial.write("gdt: GDT initialized\n");
+}
+
+// Initialize TSS
+fn init_tss() void {
+    // TODO: Implement TSS initialization
+    serial.write("tss: TSS initialized\n");
+}
+
+// Initialize CPU features
+fn init_cpu_features() void {
+    const features = arch.get_cpu_features();
     
-    // Wait 6 seconds before entering CLI
-    serial.write("barfrod: waiting 6 seconds before CLI...\n");
-    delay_seconds(6);
-    serial.write("barfrod: entering CLI\n");
+    serial.write("cpu: detected features:\n");
+    if (features.sse) serial.write("  - SSE\n");
+    if (features.sse2) serial.write("  - SSE2\n");
+    if (features.sse3) serial.write("  - SSE3\n");
+    if (features.ssse3) serial.write("  - SSSE3\n");
+    if (features.sse4_1) serial.write("  - SSE4.1\n");
+    if (features.sse4_2) serial.write("  - SSE4.2\n");
+    if (features.avx) serial.write("  - AVX\n");
+    if (features.avx2) serial.write("  - AVX2\n");
+    if (features.nx) serial.write("  - NX\n");
+    if (features.syscall) serial.write("  - SYSCALL\n");
+    if (features.pae) serial.write("  - PAE\n");
+    if (features.pge) serial.write("  - PGE\n");
     
-    // Initialize VGA for CLI
-    vga.vga_clear();
-    vga.vga_write("Kernel initialized successfully!\n");
+    // Enable CPU features
+    var cr4 = arch.read_cr4();
+    if (features.pae) cr4 |= arch.CR4.PAE;
+    if (features.pge) cr4 |= arch.CR4.PGE;
+    if (features.sse) cr4 |= arch.CR4.OSFXSR;
+    if (features.sse) cr4 |= arch.CR4.OSXMMEXCPT;
+    arch.write_cr4(cr4);
     
-    // Run interactive CLI
-    cli.run_cli();
+    // Enable NX if available
+    if (features.nx) {
+        var efer = arch.read_msr(0xC0000080);
+        efer |= arch.EFER.NXE;
+        arch.write_msr(0xC0000080, efer);
+    }
+    
+    serial.write("cpu: features enabled\n");
+}
+
+// Kernel main function
+fn kernel_main() !void {
+    serial.write("kernel: entering main function\n");
+    
+    // Initialize CPU features
+    init_cpu_features();
+    
+    // Initialize GDT and TSS
+    init_gdt();
+    init_tss();
+    
+    // Initialize memory managers
+    init_pmm();
+    init_vmm() catch {};
+    init_heap();
+    
+    // Initialize interrupt system
+    init_interrupts();
+    
+    // Initialize process manager
+    init_process_manager() catch {};
+    
+    // Initialize system call interface
+    init_syscall();
+    
+    // Enable interrupts
+    interrupts.enable_interrupts();
+    
+    // Mark kernel as initialized
+    kernel_initialized = true;
+    
+    serial.write("kernel: initialization complete\n");
+    vga.vga_write("Kernel initialization complete!\n\n");
+    
+    // Start the first user process
+    // TODO: Create and start init process
+    
+    // Run test suite
+    const test_suite = @import("test.zig");
+    test_suite.run_all_tests();
+    
+    // Enter main loop
+    kernel_loop();
+}
+
+// Kernel main loop
+fn kernel_loop() noreturn {
+    serial.write("kernel: entering main loop\n");
+    vga.vga_write("Entering kernel main loop...\n");
+    
+    while (true) {
+        // Schedule processes
+        const manager = process.get_manager();
+        _ = manager.schedule();
+        
+        // Handle any pending interrupts
+        // This is done automatically by the interrupt handlers
+        
+        // Small delay to prevent busy waiting
+        arch.pause();
+    }
+}
+
+// Kernel entry point
+export fn _start() callconv(.C) noreturn {
+    // Get multiboot info
+    const info_ptr = @as(*const MultibootInfo, @ptrFromInt(arch.read_rbp() + 16));
+    multiboot_info = info_ptr;
+    
+    // Initialize early systems
+    init_serial();
+    init_vga();
+    
+    serial.write("kernel: starting up...\n");
+    serial.write("kernel: multiboot info at 0x");
+    serial.write_hex(@as(u64, @intFromPtr(info_ptr)));
+    serial.write("\n");
+    
+    // Parse memory map
+    parse_memory_map(info_ptr);
+    
+    // Call kernel main
+    kernel_main() catch |err| {
+        serial.write("kernel: failed to initialize: ");
+        // TODO: Convert error to string
+        serial.write_hex(@as(u64, @intFromError(err)));
+        serial.write("\n");
+        while (true) arch.halt();
+    };
     
     // Should never reach here
-    halt();
+    while (true) arch.halt();
+}
+
+// Assembly interrupt wrappers
+export fn exception_wrapper() callconv(.Naked) void {
+    asm volatile (
+        \\push %rax
+        \\push %rbx
+        \\push %rcx
+        \\push %rdx
+        \\push %rsi
+        \\push %rdi
+        \\push %rbp
+        \\push %r8
+        \\push %r9
+        \\push %r10
+        \\push %r11
+        \\push %r12
+        \\push %r13
+        \\push %r14
+        \\push %r15
+        \\mov %rsp, %rdi
+        \\call handle_interrupt
+        \\pop %r15
+        \\pop %r14
+        \\pop %r13
+        \\pop %r12
+        \\pop %r11
+        \\pop %r10
+        \\pop %r9
+        \\pop %r8
+        \\pop %rbp
+        \\pop %rdi
+        \\pop %rsi
+        \\pop %rdx
+        \\pop %rcx
+        \\pop %rbx
+        \\pop %rax
+        \\add $16, %rsp  // Remove error code and vector
+        \\iretq
+    );
+}
+
+export fn interrupt_wrapper() callconv(.Naked) void {
+    asm volatile (
+        \\push %rax
+        \\push %rbx
+        \\push %rcx
+        \\push %rdx
+        \\push %rsi
+        \\push %rdi
+        \\push %rbp
+        \\push %r8
+        \\push %r9
+        \\push %r10
+        \\push %r11
+        \\push %r12
+        \\push %r13
+        \\push %r14
+        \\push %r15
+        \\mov %rsp, %rdi
+        \\call handle_interrupt
+        \\pop %r15
+        \\pop %r14
+        \\pop %r13
+        \\pop %r12
+        \\pop %r11
+        \\pop %r10
+        \\pop %r9
+        \\pop %r8
+        \\pop %rbp
+        \\pop %rdi
+        \\pop %rsi
+        \\pop %rdx
+        \\pop %rcx
+        \\pop %rbx
+        \\pop %rax
+        \\add $16, %rsp  // Remove error code and vector
+        \\iretq
+    );
+}
+
+export fn syscall_wrapper() callconv(.Naked) void {
+    asm volatile (
+        \\push %rax
+        \\push %rbx
+        \\push %rcx
+        \\push %rdx
+        \\push %rsi
+        \\push %rdi
+        \\push %rbp
+        \\push %r8
+        \\push %r9
+        \\push %r10
+        \\push %r11
+        \\push %r12
+        \\push %r13
+        \\push %r14
+        \\push %r15
+        \\mov %rsp, %rdi
+        \\call handle_syscall
+        \\pop %r15
+        \\pop %r14
+        \\pop %r13
+        \\pop %r12
+        \\pop %r11
+        \\pop %r10
+        \\pop %r9
+        \\pop %r8
+        \\pop %rbp
+        \\pop %rdi
+        \\pop %rsi
+        \\pop %rdx
+        \\pop %rcx
+        \\pop %rbx
+        \\pop %rax
+        \\sysretq
+    );
+}
+
+// Interrupt handler (called from assembly)
+export fn handle_interrupt(context: *interrupts.InterruptContext) void {
+    interrupts.handle_interrupt(@as(u8, @intCast(context.vector)), context);
+}
+
+// System call handler (called from assembly)
+export fn handle_syscall(context: *arch.Registers) void {
+    // syscall.handle_syscall(context);
+    _ = context;
+}
+
+// Context switch function (called from process manager)
+export fn context_switch(old_context: *arch.Registers, new_context: *arch.Registers) void {
+    _ = old_context;
+    
+    // Switch to new context
+    asm volatile (
+        \\mov %[new_rsp], %%rsp
+        \\pop %r15
+        \\pop %r14
+        \\pop %r13
+        \\pop %r12
+        \\pop %r11
+        \\pop %r10
+        \\pop %r9
+        \\pop %r8
+        \\pop %rbp
+        \\pop %rdi
+        \\pop %rsi
+        \\pop %rdx
+        \\pop %rcx
+        \\pop %rbx
+        \\pop %rax
+        \\add $16, %%rsp  // Skip vector and error code
+        \\iretq
+        :
+        : [new_rsp] "r" (@as(usize, @intFromPtr(new_context)) + @sizeOf(arch.Registers) - 16)
+    );
+    
+    // This should never be reached
+    unreachable;
 }
