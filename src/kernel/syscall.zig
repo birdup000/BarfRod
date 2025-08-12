@@ -314,7 +314,7 @@ fn syscall_sleep(context: *SyscallContext) SyscallResult {
 
 fn syscall_kill(context: *SyscallContext) SyscallResult {
     const pid = @as(u32, @intCast(context.args[0]));
-    const signal = @as(process.Signal, @enumFromInt(@as(i32, @truncate(context.args[1]))));
+    const signal = @as(process.Signal, @enumFromInt(@as(i32, @truncate(@as(i64, @bitCast(context.args[1]))))));
     
     const manager = process.get_manager();
     if (manager.kill_process(pid, signal)) {
@@ -389,7 +389,7 @@ fn syscall_brk(context: *SyscallContext) SyscallResult {
 }
 
 fn syscall_sbrk(context: *SyscallContext) SyscallResult {
-    const increment = @as(i64, @bitCast(@as(i32, @truncate(context.args[0]))));
+    const increment = @as(i64, @bitCast(context.args[0]));
     
     if (increment == 0) {
         // Return current break
@@ -457,8 +457,8 @@ fn syscall_write(context: *SyscallContext) SyscallResult {
 
 fn syscall_seek(context: *SyscallContext) SyscallResult {
     const fd = @as(i32, @truncate(@as(i64, @bitCast(context.args[0]))));
-    const offset = @as(i64, @bitCast(@as(i32, @truncate(context.args[1]))));
-    const whence = @as(i32, @bitCast(@as(i64, @truncate(context.args[2]))));
+    const offset = @as(i64, @bitCast(context.args[1]));
+    const whence = @as(i32, @truncate(@as(i64, @bitCast(context.args[2]))));
     
     // TODO: Implement seek
     _ = fd;
@@ -492,7 +492,7 @@ fn syscall_fstat(context: *SyscallContext) SyscallResult {
 
 // Signal handling syscalls
 fn syscall_signal(context: *SyscallContext) SyscallResult {
-    const signal = @as(process.Signal, @enumFromInt(@as(i32, @truncate(context.args[0]))));
+    const signal = @as(process.Signal, @enumFromInt(@as(i32, @truncate(@as(i64, @bitCast(context.args[0]))))));
     const handler = @as(?*const fn (i32) void, @ptrFromInt(context.args[1]));
     
     const action = process.SignalAction{
@@ -507,7 +507,7 @@ fn syscall_signal(context: *SyscallContext) SyscallResult {
 }
 
 fn syscall_sigaction(context: *SyscallContext) SyscallResult {
-    const signal = @as(process.Signal, @enumFromInt(@as(i32, @truncate(context.args[0]))));
+    const signal = @as(process.Signal, @enumFromInt(@as(i32, @truncate(@as(i64, @bitCast(context.args[0]))))));
     const act_ptr = context.args[1];
     const oldact_ptr = context.args[2];
     

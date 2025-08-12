@@ -70,15 +70,11 @@ pub const KernelHeap = struct {
         defer self.lock.release();
         
         // Allocate initial memory region
-        const addr_space = vmm.get_kernel_address_space();
+        const addr_space = vmm.get_kernel_address_space() orelse return error.OutOfMemory;
         for (0..(HEAP_INITIAL_SIZE / arch.PAGE_SIZE)) |i| {
             const phys_addr = pmm.alloc_pages(1) orelse return error.OutOfMemory;
             const virt_addr = self.start + i * arch.PAGE_SIZE;
-            try addr_space.map_page(virt_addr, phys_addr, .{
-                .writable = true,
-                .no_execute = false,
-                .global = true,
-            });
+            try addr_space.map_page(virt_addr, phys_addr, arch.PTE.P | arch.PTE.W | arch.PTE.G);
         }
         
         // Create initial free block
@@ -268,15 +264,11 @@ pub const KernelHeap = struct {
         }
         
         // Allocate new pages
-        const addr_space = vmm.get_kernel_address_space();
+        const addr_space = vmm.get_kernel_address_space() orelse return false;
         for (0..(size / arch.PAGE_SIZE)) |i| {
             const phys_addr = pmm.alloc_pages(1) orelse return false;
             const virt_addr = current_end + i * arch.PAGE_SIZE;
-            addr_space.map_page(virt_addr, phys_addr, .{
-                .writable = true,
-                .no_execute = false,
-                .global = true,
-            }) catch return false;
+            addr_space.map_page(virt_addr, phys_addr, arch.PTE.P | arch.PTE.W | arch.PTE.G) catch return false;
         }
         
         // Update heap end

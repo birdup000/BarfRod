@@ -264,14 +264,14 @@ pub const Process = struct {
     }
     
     pub fn set_signal_action(self: *Process, signal: Signal, action: SignalAction) void {
-        const sig_num = @intFromEnum(signal);
+        const sig_num = @as(usize, @intCast(@intFromEnum(signal)));
         if (sig_num > 0 and sig_num <= 32) {
             self.signal_actions[sig_num - 1] = action;
         }
     }
     
     pub fn get_signal_action(self: *Process, signal: Signal) SignalAction {
-        const sig_num = @intFromEnum(signal);
+        const sig_num = @as(usize, @intCast(@intFromEnum(signal)));
         if (sig_num > 0 and sig_num <= 32) {
             return self.signal_actions[sig_num - 1];
         }
@@ -284,7 +284,7 @@ pub const Process = struct {
     }
     
     pub fn send_signal(self: *Process, signal: Signal) void {
-        const sig_num = @intFromEnum(signal);
+        const sig_num = @as(u6, @intCast(@intFromEnum(signal)));
         if (sig_num > 0 and sig_num <= 32) {
             self.pending_signals |= @as(u64, 1) << (sig_num - 1);
         }
@@ -670,7 +670,7 @@ pub fn syscall_handler(registers: *arch.Registers) void {
         const syscall_num = @as(u64, @bitCast(registers.rax));
         switch (syscall_num) {
             0 => { // exit
-                const exit_code = @as(i32, @truncate(registers.rdi));
+                const exit_code = @as(i32, @truncate(@as(i64, @bitCast(registers.rdi))));
                 process.exit_code = exit_code;
                 process.set_state(.Terminated);
                 manager.schedule();
@@ -702,7 +702,7 @@ pub fn syscall_handler(registers: *arch.Registers) void {
             },
             else => {
                 // Unknown system call
-                registers.rax = @as(u64, @bitCast(@as(i32, -1)));
+                registers.rax = @as(u64, @bitCast(@as(i64, -1)));
             }
         }
     }

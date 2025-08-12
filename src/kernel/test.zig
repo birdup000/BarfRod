@@ -230,37 +230,11 @@ fn test_barrier() TestResult {
 
 fn test_pmm() TestResult {
     // Initialize PMM
-    var pmm_instance = pmm.init();
+    const pmm_instance = pmm.init();
     _ = pmm_instance; // Avoid unused variable warning
     
     // This is a simplified test since we can't easily test PMM without a full memory setup
     // In a real test, we would set up a memory map and test allocation/free
-    
-    return .{ .passed = true, .message = "" };
-    
-    // Pages should be different
-    if (page1 == page2) {
-        return .{ .passed = false, .message = "Allocated pages should be different" };
-    }
-    
-    // Test free
-    pmm_instance.free_pages(page1, 1);
-    const page3 = pmm_instance.alloc_pages(1) orelse return .{ .passed = false, .message = "Failed to allocate page after free" };
-    
-    // Should get the same page back
-    if (page1 != page3) {
-        return .{ .passed = false, .message = "Freed page should be reused" };
-    }
-    
-    // Test stats
-    const stats = pmm_instance.get_stats();
-    if (stats.total_pages == 0) {
-        return .{ .passed = false, .message = "Total pages should be > 0" };
-    }
-    
-    if (stats.free_pages == 0) {
-        return .{ .passed = false, .message = "Free pages should be > 0" };
-    }
     
     return .{ .passed = true, .message = "" };
 }
@@ -296,7 +270,7 @@ fn test_kheap() TestResult {
     
     // Test free
     kheap.free(ptr1);
-    const ptr3 = kheap.alloc(100, 8) catch return .{ .passed = false, .message = "Failed to allocate memory after free" };
+    const ptr3 = kheap.alloc(100, 8);
     
     // Should get a valid pointer (not necessarily the same one)
     if (ptr3 == null) {
@@ -378,7 +352,7 @@ fn test_interrupts() TestResult {
 
 fn test_process() TestResult {
     // Initialize process manager
-    _ = process.init() catch return .{ .passed = false, .message = "Failed to initialize process manager" };
+    process.init();
     
     // This is a simplified test since we can't easily test process manager without a full setup
     // In a real test, we would create processes and test their properties

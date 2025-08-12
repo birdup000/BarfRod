@@ -390,7 +390,8 @@ pub const VirtualFileSystem = struct {
         
         // Create mount point
         const mount_point = try kheap.alloc(@sizeOf(MountPoint), 8);
-        mount_point.* = .{
+        const mp = @as(*MountPoint, @alignCast(@ptrCast(@as([*]u8, mount_point))));
+        mp.* = MountPoint{
             .device_id = device_id,
             .mount_point = try self.duplicate_string(path),
             .superblock = superblock,
@@ -544,7 +545,21 @@ pub const VirtualFileSystem = struct {
             else => return error.FileSystemNotSupported,
         };
         
-        superblock.* = Superblock.init(fs_type, device_id, ops);
+        const sb = @as(*Superblock, @alignCast(@ptrCast(superblock)));
+        sb.* = Superblock{
+            .fs_type = fs_type,
+            .device_id = device_id,
+            .block_size = 4096,
+            .total_blocks = 0,
+            .free_blocks = 0,
+            .total_inodes = 0,
+            .free_inodes = 0,
+            .magic = 0,
+            .state = 0,
+            .ops = ops,
+            .private_data = null,
+            .lock = spinlock.RwSpinlock.init(),
+        };
         
         return superblock;
     }
@@ -602,8 +617,9 @@ pub const VirtualFileSystem = struct {
     fn duplicate_string(self: *VirtualFileSystem, str: []const u8) anyerror![]u8 {
         _ = self;
         const dup = try kheap.alloc(str.len, 1);
-        @memcpy(dup, str);
-        return dup;
+        const dup_slice = @as([*]u8, @ptrCast(dup))[0..str.len];
+        @memcpy(dup_slice, str);
+        return dup_slice;
     }
 };
 

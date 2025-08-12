@@ -546,10 +546,11 @@ const PITPrivateData = struct {
 fn pit_init(timer: *Timer) anyerror!void {
     // Allocate private data
     const private_data = try kheap.alloc(@sizeOf(PITPrivateData), 8);
-    private_data.* = .{
+    const private = @as(*PITPrivateData, @alignCast(@ptrCast(private_data)));
+    private.* = PITPrivateData{
         .frequency = timer.config.frequency,
         .divisor = @as(u16, @intCast(PIT_BASE_FREQUENCY / timer.config.frequency)),
-        .stats = .{
+        .stats = TimerStats{
             .interrupts = 0,
             .overflows = 0,
             .last_interrupt_time = 0,
@@ -563,13 +564,13 @@ fn pit_init(timer: *Timer) anyerror!void {
     arch.outb(PIT_REG_COMMAND, PIT_CMD_SELECT_COUNTER0 | PIT_CMD_ACCESS_LOWHIGH | PIT_CMD_MODE_SQUARE_WAVE);
     
     // Set divisor
-    arch.outb(PIT_REG_COUNTER0, @as(u8, @intCast(private_data.divisor & 0xFF)));
-    arch.outb(PIT_REG_COUNTER0, @as(u8, @intCast((private_data.divisor >> 8) & 0xFF)));
+    arch.outb(PIT_REG_COUNTER0, @as(u8, @intCast(private.divisor & 0xFF)));
+    arch.outb(PIT_REG_COUNTER0, @as(u8, @intCast((private.divisor >> 8) & 0xFF)));
 }
 
 fn pit_deinit(timer: *Timer) anyerror!void {
     if (timer.private_data) |private_data| {
-        kheap.free(private_data);
+        kheap.free(@as(*u8, @ptrCast(private_data)));
         timer.private_data = null;
     }
 }
@@ -589,7 +590,7 @@ fn pit_stop(__timer: *Timer) anyerror!void {
 
 fn pit_set_frequency(timer: *Timer, frequency: u32) anyerror!void {
     if (timer.private_data) |private_data| {
-        const private = @as(*PITPrivateData, @ptrCast(private_data));
+        const private = @as(*PITPrivateData, @alignCast(@ptrCast(private_data)));
         private.frequency = frequency;
         private.divisor = @as(u16, @intCast(PIT_BASE_FREQUENCY / frequency));
         
@@ -614,7 +615,7 @@ fn pit_set_mode(__timer: *Timer, mode: TimerMode) anyerror!void {
 
 fn pit_get_count(timer: *Timer) anyerror!u64 {
     if (timer.private_data) |private_data| {
-        const private = @as(*PITPrivateData, @ptrCast(private_data));
+        const private = @as(*PITPrivateData, @alignCast(@ptrCast(private_data)));
         
         // Latch counter value
         arch.outb(PIT_REG_COMMAND, PIT_CMD_SELECT_COUNTER0 | PIT_CMD_ACCESS_LATCH);
@@ -632,7 +633,7 @@ fn pit_get_count(timer: *Timer) anyerror!u64 {
 
 fn pit_set_count(timer: *Timer, count: u64) anyerror!void {
     if (timer.private_data) |private_data| {
-        const private = @as(*PITPrivateData, @ptrCast(private_data));
+        const private = @as(*PITPrivateData, @alignCast(@ptrCast(private_data)));
         
         // Convert to divisor
         const divisor = @as(u16, @intCast(count / (@as(u64, PIT_BASE_FREQUENCY) / private.frequency)));
@@ -646,7 +647,7 @@ fn pit_set_count(timer: *Timer, count: u64) anyerror!void {
 
 fn pit_get_stats(timer: *Timer) anyerror!TimerStats {
     if (timer.private_data) |private_data| {
-        const private = @as(*PITPrivateData, @ptrCast(private_data));
+        const private = @as(*PITPrivateData, @alignCast(@ptrCast(private_data)));
         return private.stats;
     }
     return TimerStats{
@@ -659,8 +660,8 @@ fn pit_get_stats(timer: *Timer) anyerror!TimerStats {
 
 fn pit_reset_stats(timer: *Timer) anyerror!void {
     if (timer.private_data) |private_data| {
-        const private = @as(*PITPrivateData, @ptrCast(private_data));
-        private.stats = .{
+        const private = @as(*PITPrivateData, @alignCast(@ptrCast(private_data)));
+        private.stats = TimerStats{
             .interrupts = 0,
             .overflows = 0,
             .last_interrupt_time = 0,

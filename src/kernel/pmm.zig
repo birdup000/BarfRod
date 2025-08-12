@@ -69,7 +69,7 @@ const BUDDY_MAX_ORDER = 11; // 2^11 = 2048 pages = 8MB max allocation
 const BUDDY_MIN_ORDER = 0;  // 2^0 = 1 page = 4KB min allocation
 
 const BuddyBlock = struct {
-    order: u8,
+    order: u6,
     free: bool,
     next: ?*BuddyBlock,
     prev: ?*BuddyBlock,
@@ -104,7 +104,7 @@ const BuddyAllocator = struct {
         // Add pages to buddy system in largest possible chunks
         var current = start_page;
         while (current < end_page) {
-            var order: u8 = BUDDY_MAX_ORDER;
+            var order: u6 = BUDDY_MAX_ORDER;
             while (order > BUDDY_MIN_ORDER) {
                 const block_size = @as(usize, 1) << order;
                 if (current + block_size <= end_page and
@@ -135,7 +135,7 @@ const BuddyAllocator = struct {
         return block_ptr;
     }
     
-    fn add_to_free_list(self: *BuddyAllocator, block: *BuddyBlock, order: u8) void {
+    fn add_to_free_list(self: *BuddyAllocator, block: *BuddyBlock, order: u6) void {
         block.next = self.free_lists[order];
         if (self.free_lists[order]) |head| {
             head.prev = block;
@@ -143,7 +143,7 @@ const BuddyAllocator = struct {
         self.free_lists[order] = block;
     }
     
-    fn remove_from_free_list(self: *BuddyAllocator, block: *BuddyBlock, order: u8) void {
+    fn remove_from_free_list(self: *BuddyAllocator, block: *BuddyBlock, order: u6) void {
         if (block.prev) |prev| {
             prev.next = block.next;
         } else {
@@ -156,7 +156,7 @@ const BuddyAllocator = struct {
         block.prev = null;
     }
     
-    pub fn alloc(self: *BuddyAllocator, order: u8) ?u64 {
+    pub fn alloc(self: *BuddyAllocator, order: u6) ?u64 {
         if (order > BUDDY_MAX_ORDER) return null;
         
         self.lock.acquire();
@@ -171,7 +171,7 @@ const BuddyAllocator = struct {
         }
         
         // Try to split a larger block
-        var i: u8 = order + 1;
+        var i: u6 = order + 1;
         while (i <= BUDDY_MAX_ORDER) : (i += 1) {
             if (self.free_lists[i]) |block| {
                 self.remove_from_free_list(block, i);
@@ -180,12 +180,12 @@ const BuddyAllocator = struct {
                 var current_order = i;
                 while (current_order > order) {
                     current_order -= 1;
-                    const buddy_page = @as(usize, @intFromPtr(block)) ^ (@as(usize, 1) << (current_order + PAGE_SHIFT));
+                    const buddy_page = @as(usize, @intFromPtr(block)) ^ (@as(usize, 1) << (@as(usize, @intCast(current_order)) + PAGE_SHIFT));
                     const buddy = self.create_block(buddy_page, current_order);
                     self.add_to_free_list(buddy, current_order);
                 }
                 
-                block.order = @as(u6, @truncate(order));
+                block.order = order;
                 block.free = false;
                 self.free_pages -= @as(usize, 1) << order;
                 return @as(u64, @intFromPtr(block)) & ~(PAGE_SIZE - 1);
@@ -195,7 +195,7 @@ const BuddyAllocator = struct {
         return null;
     }
     
-    pub fn free(self: *BuddyAllocator, addr: u64, order: u8) void {
+    pub fn free(self: *BuddyAllocator, addr: u64, order: u6) void {
         if (order > BUDDY_MAX_ORDER) return;
         
         self.lock.acquire();
@@ -203,12 +203,12 @@ const BuddyAllocator = struct {
         
         const block = @as(*BuddyBlock, @ptrFromInt(addr));
         block.free = true;
-        self.free_pages += @as(usize, 1) << @as(u6, @truncate(order));
+        self.free_pages += @as(usize, 1) << order;
         
         // Try to merge with buddy
         var current_order = order;
         while (current_order < BUDDY_MAX_ORDER) {
-            const buddy_page = @as(usize, @intFromPtr(block)) ^ (@as(usize, 1) << (@as(u6, @truncate(current_order)) + PAGE_SHIFT));
+            const buddy_page = @as(usize, @intFromPtr(block)) ^ (@as(usize, 1) << (@as(usize, @intCast(current_order)) + PAGE_SHIFT));
             const buddy = @as(*BuddyBlock, @ptrFromInt(buddy_page));
             
             if (buddy.free and buddy.order == current_order) {
@@ -508,7 +508,7 @@ pub const PhysicalMemoryManager = struct {
         if (!self.initialized) return null;
         
         // Calculate required order
-        var order: u8 = 0;
+        var order: u6 = 0;
         var needed = count;
         while (needed > 1) {
             needed >>= 1;
@@ -522,7 +522,7 @@ pub const PhysicalMemoryManager = struct {
         if (!self.initialized) return;
         
         // Calculate order
-        var order: u8 = 0;
+        var order: u6 = 0;
         var needed = count;
         while (needed > 1) {
             needed >>= 1;

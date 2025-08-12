@@ -233,6 +233,20 @@ pub const RwSpinlock = struct {
         self.readers += 1;
         return true;
     }
+    
+    pub fn try_acquire_write(self: *RwSpinlock) bool {
+        self.lock.acquire();
+        defer self.lock.release();
+        
+        // Check if there are any readers or a writer
+        if (self.readers != 0 or self.writer != 0) {
+            return false;
+        }
+        
+        // Acquire write lock
+        self.writer = 1;
+        return true;
+    }
 };
 
 // Ticket spinlock for fairness

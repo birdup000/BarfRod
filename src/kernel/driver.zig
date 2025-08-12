@@ -507,8 +507,8 @@ pub const DriverManager = struct {
     fn match_driver(self: *DriverManager, device: *Device) !void {
         var driver = self.drivers;
         while (driver != null) {
-            if (driver.?.probe(device.?)) {
-                device.?.driver = driver.?;
+            if (driver.?.probe(device) catch false) {
+                device.driver = driver.?;
                 return;
             }
             driver = driver.?.next;
