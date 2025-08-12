@@ -182,7 +182,9 @@ pub const KernelHeap = struct {
         const new_ptr = try self.alloc(new_size, HEAP_ALIGNMENT);
         
         // Copy old data to new block
-        @memcpy(new_ptr, ptr[0..old_size]);
+        const src_slice = @as([*]u8, @ptrCast(ptr))[0..old_size];
+        const dst_slice = @as([*]u8, @ptrCast(new_ptr))[0..old_size];
+        @memcpy(dst_slice, src_slice);
         
         // Free old block
         self.free(ptr);

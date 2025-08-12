@@ -270,20 +270,16 @@ fn test_kheap() TestResult {
     
     // Test free
     kheap.free(ptr1);
-    const ptr3 = kheap.alloc(100, 8);
+    const ptr3 = kheap.alloc(100, 8) catch return .{ .passed = false, .message = "Failed to allocate memory after free" };
     
     // Should get a valid pointer (not necessarily the same one)
-    if (ptr3 == null) {
-        return .{ .passed = false, .message = "Failed to allocate memory after free" };
-    }
+    _ = ptr3; // Mark as used
     
     // Test realloc
     const ptr4 = kheap.realloc(ptr2, 300) catch return .{ .passed = false, .message = "Failed to reallocate memory" };
     
     // Should get a valid pointer
-    if (ptr4 == null) {
-        return .{ .passed = false, .message = "Failed to reallocate memory" };
-    }
+    _ = ptr4; // Mark as used
     
     // Test stats
     const stats = kheap.get_stats();

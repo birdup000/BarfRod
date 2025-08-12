@@ -390,7 +390,7 @@ pub const VirtualFileSystem = struct {
         
         // Create mount point
         const mount_point = try kheap.alloc(@sizeOf(MountPoint), 8);
-        const mp = @as(*MountPoint, @alignCast(@ptrCast(@as([*]u8, mount_point))));
+        const mp = @as(*MountPoint, @alignCast(@ptrCast(mount_point)));
         mp.* = MountPoint{
             .device_id = device_id,
             .mount_point = try self.duplicate_string(path),
@@ -404,13 +404,13 @@ pub const VirtualFileSystem = struct {
         
         // Add to mount points list
         if (self.mount_points == null) {
-            self.mount_points = mount_point;
+            self.mount_points = mp;
         } else {
             var current = self.mount_points;
             while (current.?.next != null) {
                 current = current.?.next;
             }
-            current.?.next = mount_point;
+            current.?.next = mp;
         }
         
         // If this is the root file system
@@ -561,7 +561,7 @@ pub const VirtualFileSystem = struct {
             .lock = spinlock.RwSpinlock.init(),
         };
         
-        return superblock;
+        return @as(*Superblock, @alignCast(@ptrCast(superblock)));
     }
     
     fn find_mount_point(self: *VirtualFileSystem, path: []const u8) ?*MountPoint {

@@ -180,9 +180,10 @@ const BuddyAllocator = struct {
                 var current_order = i;
                 while (current_order > order) {
                     current_order -= 1;
-                    const buddy_page = @as(usize, @intFromPtr(block)) ^ (@as(usize, 1) << (@as(usize, @intCast(current_order)) + PAGE_SHIFT));
-                    const buddy = self.create_block(buddy_page, current_order);
-                    self.add_to_free_list(buddy, current_order);
+                    const shift_amount = @as(u6, current_order) + @as(u6, @intCast(PAGE_SHIFT));
+                    const buddy_page = @as(usize, @intFromPtr(block)) ^ (@as(usize, 1) << shift_amount);
+                    const buddy = self.create_block(buddy_page, @as(u6, @intCast(current_order)));
+                    self.add_to_free_list(buddy, @as(u6, @intCast(current_order)));
                 }
                 
                 block.order = order;
@@ -208,7 +209,8 @@ const BuddyAllocator = struct {
         // Try to merge with buddy
         var current_order = order;
         while (current_order < BUDDY_MAX_ORDER) {
-            const buddy_page = @as(usize, @intFromPtr(block)) ^ (@as(usize, 1) << (@as(usize, @intCast(current_order)) + PAGE_SHIFT));
+            const shift_amount = @as(u6, current_order) + @as(u6, @intCast(PAGE_SHIFT));
+            const buddy_page = @as(usize, @intFromPtr(block)) ^ (@as(usize, 1) << shift_amount);
             const buddy = @as(*BuddyBlock, @ptrFromInt(buddy_page));
             
             if (buddy.free and buddy.order == current_order) {
