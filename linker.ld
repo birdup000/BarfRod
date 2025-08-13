@@ -2,8 +2,8 @@ OUTPUT_FORMAT(elf64-x86-64)
 OUTPUT_ARCH(i386:x86-64)
 ENTRY(_start)
 
-/* Use higher half kernel mapping */
-__KERNEL_VMA = 0xFFFFFFFF80000000;
+/* Use traditional kernel mapping at 1MB */
+__KERNEL_VMA = 0;
 
 PHDRS
 {
@@ -18,27 +18,21 @@ SECTIONS
   . = 1M;
   __KERNEL_START_PHYS = .;
 
-  /* Adjust VMA to higher half */
-  . += __KERNEL_VMA;
-  _kernel_start_vaddr = .;
-
   /* Multiboot2 header must be at exactly 1MiB */
   .multiboot2 :
   {
-    . = ALIGN(8);
     KEEP(*(.multiboot2))
-    /* Ensure section is exactly 24 bytes (multiboot2 header size) */
-    . = . + 24;
   } :text
 
   /* Multiboot header for backward compatibility */
   .multiboot :
   {
-    . = ALIGN(4);
     KEEP(*(.multiboot))
-    /* Ensure section is exactly 12 bytes (multiboot header size) */
-    . = . + 12;
   } :text
+
+  /* Adjust VMA to higher half */
+  . += __KERNEL_VMA;
+  _kernel_start_vaddr = .;
 
   /* Start text section after multiboot header */
   .text :

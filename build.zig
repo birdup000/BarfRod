@@ -53,10 +53,23 @@ pub fn build(b: *std.Build) void {
 
     // Add raw backend flags to avoid compiler-rt and stack protector emission on this toolchain
     // On this Zig (snap), prefer root_module.addCSourceFlags/AddArgs equivalents are not exposed.
-    // Use install step environment to forward flags via ZIG_GLOBAL_ARGS (supported by zig build runner).
-    const no_sanitize_env = b.addSystemCommand(&.{ "bash", "-c", "export ZIG_GLOBAL_ARGS='-fno-emit-stack-protector -fno-emit-compiler-rt'; true" });
-    no_sanitize_env.step.dependOn(&install_kernel.step);
-    // Keep iso step depending on install, which depends on this env step implicitly
+    // Use environment variables to set compiler flags
+    const set_env_cmd = b.addSystemCommand(&.{ "bash", "-c",
+        \\export ZIG_GLOBAL_ARGS='-fno-emit-stack-protector -fno-emit-compiler-rt -mcmodel=kernel -mno-red-zone'
+        \\export CFLAGS='-mcmodel=kernel -mno-red-zone'
+        \\export LDFLAGS='-z max-page-size=4096'
+    });
+    
+    // Rebuild kernel with the correct environment
+    const rebuild_cmd = b.addSystemCommand(&.{ "bash", "-c",
+        \\export ZIG_GLOBAL_ARGS='-fno-emit-stack-protector -fno-emit-compiler-rt -mcmodel=kernel -mno-red-zone'
+        \\export CFLAGS='-mcmodel=kernel -mno-red-zone'
+        \\export LDFLAGS='-z max-page-size=4096'
+        \\zig build
+    });
+    
+    set_env_cmd.step.dependOn(&install_kernel.step);
+    rebuild_cmd.step.dependOn(&set_env_cmd.step);
 
     // ISO creation
     const iso_step = b.step("iso", "Build a bootable ISO image with GRUB");

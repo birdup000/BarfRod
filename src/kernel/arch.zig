@@ -99,10 +99,10 @@ pub const PTE = packed struct {
 
 // Memory layout
 pub const MEMORY_LAYOUT = struct {
-    pub const KERNEL_BASE: u64 = 0xFFFF800000000000;
-    pub const KERNEL_OFFSET: u64 = 0xFFFFFFFF80000000;
+    pub const KERNEL_BASE: u64 = 0x00100000; // 1MB
+    pub const KERNEL_OFFSET: u64 = 0x00100000; // 1MB
     pub const KERNEL_PHYS_BASE: u64 = 0x00100000;
-    pub const KERNEL_VIRT_BASE: u64 = 0xFFFFFFFF80000000;
+    pub const KERNEL_VIRT_BASE: u64 = 0x00100000;
     pub const KERNEL_STACK_SIZE: u64 = 0x10000; // 64KB
     pub const USER_STACK_TOP: u64 = 0x00007FFFFFFFF000;
     pub const USER_STACK_SIZE: u64 = 0x10000; // 64KB
@@ -110,9 +110,9 @@ pub const MEMORY_LAYOUT = struct {
     pub const HUGE_PAGE_SIZE: u64 = 0x200000; // 2MB
     
     // Hardware addresses mapped in kernel space
-    pub const VGA_BUFFER_VIRT: u64 = 0xFFFFFFFF80000000 + 0xB8000;
-    pub const VGA_CTRL_REGS_VIRT: u64 = 0xFFFFFFFF80000000 + 0x3D4;
-    pub const SERIAL_PORT_VIRT: u64 = 0xFFFFFFFF80000000 + 0x3F8;
+    pub const VGA_BUFFER_VIRT: u64 = 0xB8000;
+    pub const VGA_CTRL_REGS_VIRT: u64 = 0x3D4;
+    pub const SERIAL_PORT_VIRT: u64 = 0x3F8;
 };
 
 // Page size constant for direct access
