@@ -2,8 +2,8 @@ OUTPUT_FORMAT(elf64-x86-64)
 OUTPUT_ARCH(i386:x86-64)
 ENTRY(_start)
 
-/* Use direct mapping for now - no higher half */
-__KERNEL_VMA = 0;
+/* Use higher half kernel mapping */
+__KERNEL_VMA = 0xFFFFFFFF80000000;
 
 PHDRS
 {
@@ -14,12 +14,24 @@ PHDRS
 
 SECTIONS
 {
-  /* Link with VMA and LMA at physical 1MiB so bootloader can load it */
+  /* Link with VMA at higher half and LMA at physical 1MiB so bootloader can load it */
   . = 1M;
+  __KERNEL_START_PHYS = .;
 
+  /* Adjust VMA to higher half */
+  . += __KERNEL_VMA;
   _kernel_start_vaddr = .;
 
-  /* Multiboot header must be at exactly 1MiB */
+  /* Multiboot2 header must be at exactly 1MiB */
+  .multiboot2 :
+  {
+    . = ALIGN(8);
+    KEEP(*(.multiboot2))
+    /* Ensure section is exactly 24 bytes (multiboot2 header size) */
+    . = . + 24;
+  } :text
+
+  /* Multiboot header for backward compatibility */
   .multiboot :
   {
     . = ALIGN(4);
@@ -38,7 +50,7 @@ SECTIONS
     _text_end = .;
   } :text
 
-  .rodata : AT(ADDR(.rodata))
+  .rodata : AT(ADDR(.rodata) - __KERNEL_VMA)
   ALIGN(4K)
   {
     _rodata_start = .;
@@ -46,7 +58,7 @@ SECTIONS
     _rodata_end = .;
   } :rodata
 
-  .data : AT(ADDR(.data))
+  .data : AT(ADDR(.data) - __KERNEL_VMA)
   ALIGN(4K)
   {
     _data_start = .;
@@ -54,7 +66,7 @@ SECTIONS
     _data_end = .;
   } :data
 
-  .bss (NOLOAD) : AT(ADDR(.bss))
+  .bss (NOLOAD) : AT(ADDR(.bss) - __KERNEL_VMA)
   ALIGN(4K)
   {
     _bss_start = .;
@@ -64,6 +76,7 @@ SECTIONS
   } :data
 
   _kernel_end_vaddr = .;
+  __KERNEL_END_PHYS = _kernel_end_vaddr - __KERNEL_VMA;
 
   /DISCARD/ :
   {

@@ -11,7 +11,12 @@ const syscall = @import("syscall.zig");
 const serial = @import("serial.zig");
 const vga = @import("vga.zig");
 
-// Multiboot header constants
+// Multiboot2 header constants
+const MULTIBOOT2_HEADER_MAGIC: u32 = 0xE85250D6;
+const MULTIBOOT2_HEADER_FLAGS: u32 = 0x00000003;
+const MULTIBOOT2_HEADER_CHECKSUM: u32 = ~(MULTIBOOT2_HEADER_MAGIC + MULTIBOOT2_HEADER_FLAGS) + 1;
+
+// Multiboot header constants (for backward compatibility)
 const MULTIBOOT_HEADER_MAGIC: u32 = 0x1BADB002;
 const MULTIBOOT_HEADER_FLAGS: u32 = 0x00000003;
 const MULTIBOOT_HEADER_CHECKSUM: u32 = ~(MULTIBOOT_HEADER_MAGIC + MULTIBOOT_HEADER_FLAGS) + 1;
@@ -21,6 +26,14 @@ export var multiboot_header align(4) linksection(".multiboot") = extern struct {
     magic: u32 = MULTIBOOT_HEADER_MAGIC,
     flags: u32 = MULTIBOOT_HEADER_FLAGS,
     checksum: u32 = MULTIBOOT_HEADER_CHECKSUM,
+}{};
+
+// Force Multiboot2 header to be at start of binary
+export var multiboot2_header align(8) linksection(".multiboot2") = extern struct {
+    magic: u32 = MULTIBOOT2_HEADER_MAGIC,
+    architecture: u32 = 0, // i386
+    header_length: u32 = 24,
+    checksum: u32 = MULTIBOOT2_HEADER_CHECKSUM,
 }{};
 
 // Multiboot info structure
@@ -143,12 +156,45 @@ fn log(comptime level: []const u8, comptime format: []const u8, args: anytype) v
 }
 
 // Kernel entry point
-export fn kmain() callconv(.C) noreturn {
+export fn kmain(multiboot_magic: u32, multiboot_info_addr: u32) callconv(.C) noreturn {
     // Initialize serial first for logging
     serial.init();
     serial.write("Kernel starting...\n");
 
-    // Initialize VGA
+    // Early VGA initialization (before memory management)
+    var early_vga = vga.VGA.init_early();
+    early_vga.clear_screen();
+    early_vga.set_color(.LightGrey, .Black);
+    early_vga.write_string("BarfRod Kernel Booting...\n");
+    
+    // Check multiboot magic
+    if (multiboot_magic != 0x2BADB002 and multiboot_magic != 0xE85250D6) {
+        early_vga.set_color(.Red, .Black);
+        early_vga.write_string("ERROR: Invalid multiboot magic!\n");
+        serial.write("ERROR: Invalid multiboot magic!\n");
+        while (true) arch.halt();
+    }
+    
+    // Parse multiboot info
+    const info = @as(*const MultibootInfo, @ptrFromInt(@as(usize, @intCast(multiboot_info_addr))));
+    multiboot_info = info;
+    
+    // Parse memory map
+    parse_memory_map(info);
+    
+    // Initialize PMM
+    log("INFO", "Initializing PMM...", .{});
+    pmm.init();
+    pmm.get_instance().setup(memory_map);
+
+    // Initialize VMM
+    log("INFO", "Initializing VMM...", .{});
+    vmm.init() catch |err| {
+        log("FATAL", "VMM initialization failed: {}", .{err});
+        arch.halt();
+    };
+
+    // Now reinitialize VGA with proper virtual mapping
     vga.init();
     
     // Clear screen and show initial message
@@ -158,15 +204,6 @@ export fn kmain() callconv(.C) noreturn {
     
     // Show a boot screen
     show_boot_screen();
-
-    log("INFO", "Initializing PMM...", .{});
-    pmm.init();
-
-    log("INFO", "Initializing VMM...", .{});
-    vmm.init() catch |err| {
-        log("FATAL", "VMM initialization failed: {}", .{err});
-        arch.halt();
-    };
 
     log("INFO", "Initializing Interrupts...", .{});
     interrupts.init();
@@ -383,8 +420,19 @@ export fn _start() callconv(.C) noreturn {
         : "rsp"
     );
 
-    // Call the main kernel function
-    kmain();
+    // Get multiboot information from stack
+    var multiboot_magic: u32 = undefined;
+    var multiboot_info_addr: u32 = undefined;
+    
+    asm volatile (
+        \\mov %%ebx, %[magic]
+        \\mov %%eax, %[info]
+        : [magic] "=r" (multiboot_magic),
+          [info] "=r" (multiboot_info_addr)
+    );
+
+    // Call the main kernel function with multiboot info
+    kmain(multiboot_magic, multiboot_info_addr);
 }
 
 fn show_boot_screen() void {
@@ -414,6 +462,18 @@ fn show_boot_screen() void {
     vga_instance.cursor_y = 17;
     vga_instance.update_cursor();
     vga.vga_write_line("");
+    
+    // Test VGA functionality
+    vga.set_color(.Cyan, .Black);
+    vga.vga_write_line("Testing VGA functionality...");
+    const test_result = vga_instance.test_vga();
+    if (test_result) {
+        vga.set_color(.Green, .Black);
+        vga.vga_write_line("VGA Test: PASSED");
+    } else {
+        vga.set_color(.Red, .Black);
+        vga.vga_write_line("VGA Test: FAILED");
+    }
 }
 
 // Helper to draw a box on the screen

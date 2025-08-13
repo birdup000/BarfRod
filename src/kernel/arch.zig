@@ -108,6 +108,11 @@ pub const MEMORY_LAYOUT = struct {
     pub const USER_STACK_SIZE: u64 = 0x10000; // 64KB
     pub const PAGE_SIZE: u64 = 0x1000; // 4KB
     pub const HUGE_PAGE_SIZE: u64 = 0x200000; // 2MB
+    
+    // Hardware addresses mapped in kernel space
+    pub const VGA_BUFFER_VIRT: u64 = 0xFFFFFFFF80000000 + 0xB8000;
+    pub const VGA_CTRL_REGS_VIRT: u64 = 0xFFFFFFFF80000000 + 0x3D4;
+    pub const SERIAL_PORT_VIRT: u64 = 0xFFFFFFFF80000000 + 0x3F8;
 };
 
 // Page size constant for direct access

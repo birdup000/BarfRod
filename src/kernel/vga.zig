@@ -4,7 +4,9 @@ const arch = @import("arch.zig");
 // VGA text mode constants
 pub const VGA_WIDTH = 80;
 pub const VGA_HEIGHT = 25;
-const VGA_BUFFER_ADDR = 0xB8000;
+const VGA_BUFFER_PHYS_ADDR = 0xB8000;
+const VGA_BUFFER_ADDR = arch.MEMORY_LAYOUT.VGA_BUFFER_VIRT; // Kernel virtual mapping
+const VGA_CTRL_REGS_ADDR = arch.MEMORY_LAYOUT.VGA_CTRL_REGS_VIRT;
 
 // VGA color constants
 pub const Color = enum(u4) {
@@ -46,6 +48,20 @@ pub const VGA = struct {
     pub fn init() VGA {
         var vga = VGA{
             .buffer = @as([*]volatile u16, @ptrFromInt(VGA_BUFFER_ADDR)),
+            .cursor_x = 0,
+            .cursor_y = 0,
+            .fg_color = .LightGrey,
+            .bg_color = .Black,
+        };
+        vga.clear_screen();
+        vga.enable_cursor(true);
+        return vga;
+    }
+    
+    // Initialize VGA with physical address (for early boot)
+    pub fn init_early() VGA {
+        var vga = VGA{
+            .buffer = @as([*]volatile u16, @ptrFromInt(VGA_BUFFER_PHYS_ADDR)),
             .cursor_x = 0,
             .cursor_y = 0,
             .fg_color = .LightGrey,
@@ -159,6 +175,38 @@ pub const VGA = struct {
             arch.outb(0x3D4, 0x0A);
             arch.outb(0x3D5, 0x20);
         }
+    }
+    
+    // Test VGA functionality by writing a test pattern
+    pub fn test_vga(self: *VGA) bool {
+        // Save current state
+        const old_x = self.cursor_x;
+        const old_y = self.cursor_y;
+        const old_fg = self.fg_color;
+        const old_bg = self.bg_color;
+        
+        // Test pattern
+        self.cursor_x = 0;
+        self.cursor_y = 0;
+        self.update_cursor();
+        
+        // Write test characters
+        self.set_color(.White, .Black);
+        self.write_string("VGA TEST: ");
+        
+        self.set_color(.Green, .Black);
+        self.write_string("OK");
+        
+        self.write_byte('\n');
+        
+        // Restore state
+        self.cursor_x = old_x;
+        self.cursor_y = old_y;
+        self.fg_color = old_fg;
+        self.bg_color = old_bg;
+        self.update_cursor();
+        
+        return true;
     }
 };
 

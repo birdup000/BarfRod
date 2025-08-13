@@ -465,11 +465,15 @@ pub const VirtualMemoryManager = struct {
         // Map kernel code and data
         // TODO: Implement proper kernel mapping
         
-        // Map VGA buffer
+        // Map VGA buffer with proper caching
         try self.kernel_space.map_page(0xB8000, 0xB8000, arch.PTE.P | arch.PTE.W | arch.PTE.CD);
         
         // Map serial ports
         try self.kernel_space.map_page(0x3F8, 0x3F8, arch.PTE.P | arch.PTE.W);
+        
+        // Map other important hardware registers
+        try self.kernel_space.map_page(0x3D4, 0x3D4, arch.PTE.P | arch.PTE.W); // VGA control registers
+        try self.kernel_space.map_page(0x3D5, 0x3D5, arch.PTE.P | arch.PTE.W); // VGA control registers
         
         serial.write("vmm: kernel mapping setup complete\n");
     }
