@@ -150,7 +150,12 @@ export fn kmain() callconv(.C) noreturn {
 
     // Initialize VGA
     vga.init();
-
+    
+    // Clear screen and show initial message
+    vga.clear_screen();
+    vga.set_color(.LightGrey, .Black);
+    vga.vga_write_line("BarfRod Kernel Booting...");
+    
     // Show a boot screen
     show_boot_screen();
 
@@ -378,26 +383,8 @@ export fn _start() callconv(.C) noreturn {
         : "rsp"
     );
 
-    // Initialize VGA directly
-    const vga_buffer = @as(*volatile [25][80]u16, @ptrFromInt(0xB8000));
-    
-    // Clear screen with blue background
-    for (0..25) |y| {
-        for (0..80) |x| {
-            vga_buffer[y][x] = 0x1F00 | ' ';
-        }
-    }
-    
-    // Write test message
-    const msg = "BARFROD KERNEL BOOTED!";
-    for (0..msg.len) |i| {
-        vga_buffer[0][i] = @as(u16, 0x1F00) | @as(u16, msg[i]);
-    }
-    
-    // Hang forever
-    while (true) {
-        asm volatile ("hlt");
-    }
+    // Call the main kernel function
+    kmain();
 }
 
 fn show_boot_screen() void {
@@ -406,7 +393,10 @@ fn show_boot_screen() void {
     print_logo();
 
     vga.set_color(.Green, .Black);
-    move_cursor(10, 15);
+    const vga_instance = vga.get_instance();
+    vga_instance.cursor_x = 10;
+    vga_instance.cursor_y = 15;
+    vga_instance.update_cursor();
     vga.vga_write("Booting: [");
     
     const progress_bar_width = 50;
@@ -420,7 +410,9 @@ fn show_boot_screen() void {
     vga.vga_write("]");
     
     vga.set_color(.LightGrey, .Black);
-    move_cursor(0, 17);
+    vga_instance.cursor_x = 0;
+    vga_instance.cursor_y = 17;
+    vga_instance.update_cursor();
     vga.vga_write_line("");
 }
 
@@ -468,12 +460,7 @@ fn vga_entry(char: u8, fg: vga.Color, bg: vga.Color) u16 {
     return @as(u16, char) | (@as(u16, color) << 8);
 }
 
-fn move_cursor(x: u8, y: u8) void {
-    const vga_instance = vga.get_instance();
-    vga_instance.cursor_x = x;
-    vga_instance.cursor_y = y;
-    vga_instance.update_cursor();
-}
+// This function is no longer needed as we can directly access the VGA instance
 
 // Assembly interrupt wrappers
 export fn exception_wrapper() callconv(.Naked) void {

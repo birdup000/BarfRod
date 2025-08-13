@@ -144,8 +144,7 @@ pub const VGA = struct {
         // Handle VGA cursor position with explicit type handling
         const pos_u16 = @as(u16, pos);
         const high_byte = @as(u8, @truncate(pos_u16 >> 8));
-        const masked_high = @as(u3, @truncate(high_byte));
-        arch.outb(0x3D5, masked_high);
+        arch.outb(0x3D5, high_byte);
     }
 
     // Enable or disable the hardware cursor
