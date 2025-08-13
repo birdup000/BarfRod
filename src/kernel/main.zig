@@ -117,8 +117,6 @@ fn delay_seconds(seconds: u64) void {
 // Initialize serial port
 fn init_serial() void {
     serial.init();
-    serial.write("BarfRod Kernel v2.0 - Redesigned Architecture\n");
-    serial.write("==========================================\n");
 }
 
 // Initialize VGA
@@ -393,21 +391,6 @@ fn scancode_to_ascii(scancode: u8) u8 {
 // Kernel entry point
 export fn _start() callconv(.C) noreturn {
     // Early VGA output - direct write to test if VGA works
-    const vga_buffer_early = @as(*volatile [25][80]u16, @ptrFromInt(0xB8000));
-    vga_buffer_early[0][0] = 0x0F00 | 'B';
-    vga_buffer_early[0][1] = 0x0F00 | 'a';
-    vga_buffer_early[0][2] = 0x0F00 | 'r';
-    vga_buffer_early[0][3] = 0x0F00 | 'f';
-    vga_buffer_early[0][4] = 0x0F00 | 'R';
-    vga_buffer_early[0][5] = 0x0F00 | 'o';
-    vga_buffer_early[0][6] = 0x0F00 | 'd';
-    vga_buffer_early[0][7] = 0x0F00 | ' ';
-    vga_buffer_early[0][8] = 0x0F00 | 'K';
-    vga_buffer_early[0][9] = 0x0F00 | 'e';
-    vga_buffer_early[0][10] = 0x0F00 | 'r';
-    vga_buffer_early[0][11] = 0x0F00 | 'n';
-    vga_buffer_early[0][12] = 0x0F00 | 'e';
-    vga_buffer_early[0][13] = 0x0F00 | 'l';
     
     // Get multiboot info
     const info_ptr = @as(*const MultibootInfo, @ptrFromInt(arch.read_rbp() + 16));
