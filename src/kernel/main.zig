@@ -159,8 +159,7 @@ export fn kmain() callconv(.C) noreturn {
 
     log("INFO", "Initializing VMM...", .{});
     vmm.init() catch |err| {
-        log("FATAL", "VMM initialization failed!", .{});
-        _ = err;
+        log("FATAL", "VMM initialization failed: {}", .{err});
         arch.halt();
     };
 
@@ -379,7 +378,26 @@ export fn _start() callconv(.C) noreturn {
         : "rsp"
     );
 
-    kmain();
+    // Initialize VGA directly
+    const vga_buffer = @as(*volatile [25][80]u16, @ptrFromInt(0xB8000));
+    
+    // Clear screen with blue background
+    for (0..25) |y| {
+        for (0..80) |x| {
+            vga_buffer[y][x] = 0x1F00 | ' ';
+        }
+    }
+    
+    // Write test message
+    const msg = "BARFROD KERNEL BOOTED!";
+    for (0..msg.len) |i| {
+        vga_buffer[0][i] = @as(u16, 0x1F00) | @as(u16, msg[i]);
+    }
+    
+    // Hang forever
+    while (true) {
+        asm volatile ("hlt");
+    }
 }
 
 fn show_boot_screen() void {
@@ -392,7 +410,7 @@ fn show_boot_screen() void {
     vga.vga_write("Booting: [");
     
     const progress_bar_width = 50;
-    for (0..progress_bar_width) |i| {
+    for (0..progress_bar_width) |_| {
         vga.vga_write("#");
         // A small delay to simulate loading
         var j: u32 = 0;

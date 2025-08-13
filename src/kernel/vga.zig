@@ -110,7 +110,7 @@ pub const VGA = struct {
             },
             '\t' => {
                 const TAB_WIDTH = 4;
-                self.cursor_x = (self.cursor_x + TAB_WIDTH) & ~(TAB_WIDTH - 1);
+                self.cursor_x = (self.cursor_x + TAB_WIDTH) & ~@as(u8, TAB_WIDTH - 1);
             },
             else => {
                 self.put_char_at(self.cursor_x, self.cursor_y, byte);
@@ -136,12 +136,16 @@ pub const VGA = struct {
     }
 
     // Update the hardware cursor position
-    fn update_cursor(self: *VGA) void {
+    pub fn update_cursor(self: *VGA) void {
         const pos = self.cursor_y * VGA_WIDTH + self.cursor_x;
         arch.outb(0x3D4, 0x0F);
         arch.outb(0x3D5, @as(u8, @truncate(pos & 0xFF)));
         arch.outb(0x3D4, 0x0E);
-        arch.outb(0x3D5, @as(u8, @truncate((pos >> 8) & 0xFF)));
+        // Handle VGA cursor position with explicit type handling
+        const pos_u16 = @as(u16, pos);
+        const high_byte = @as(u8, @truncate(pos_u16 >> 8));
+        const masked_high = @as(u3, @truncate(high_byte));
+        arch.outb(0x3D5, masked_high);
     }
 
     // Enable or disable the hardware cursor
@@ -151,7 +155,7 @@ pub const VGA = struct {
             arch.outb(0x3D4, 0x0A);
             arch.outb(0x3D5, (arch.inb(0x3D5) & 0xC0) | 14);
             arch.outb(0x3D4, 0x0B);
-            arch.outb(0x3D5, (arch.inb(0x3D5) & 0xE0) | 15);
+            arch.outb(0x3D5, (arch.inb(0x3D5) & 0xE0) | @as(u8, 15));
         } else {
             arch.outb(0x3D4, 0x0A);
             arch.outb(0x3D5, 0x20);
@@ -161,7 +165,7 @@ pub const VGA = struct {
 
 // Helper to create a 16-bit VGA entry
 fn vga_entry(char: u8, fg: Color, bg: Color) u16 {
-    const color = @intFromEnum(fg) | (@intFromEnum(bg) << 4);
+    const color = @as(u8, @intFromEnum(fg)) | (@as(u8, @intFromEnum(bg)) << 4);
     return @as(u16, char) | (@as(u16, color) << 8);
 }
 
