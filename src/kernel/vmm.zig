@@ -155,11 +155,10 @@ pub const AddressSpace = struct {
             @as(*[512]PageTableEntry, @ptrCast(pml4))[i] = PageTableEntry.empty();
         }
         
-        // Map kernel space
-        const kernel_pml4 = @as(*PageTableEntry, @ptrFromInt(arch.MEMORY_LAYOUT.KERNEL_VIRT_BASE + 0x1000));
-        const kernel_pml4_index = (arch.MEMORY_LAYOUT.KERNEL_VIRT_BASE >> 39) & PTE_INDEX_MASK;
-        const kernel_pml4_entry = @as(*[512]PageTableEntry, @ptrCast(kernel_pml4))[kernel_pml4_index];
-        @as(*[512]PageTableEntry, @ptrCast(pml4))[(arch.MEMORY_LAYOUT.KERNEL_VIRT_BASE >> 39) & PTE_INDEX_MASK] = kernel_pml4_entry;
+        // Self-map the PML4 (recursive mapping)
+        const pml4_index = (arch.MEMORY_LAYOUT.KERNEL_VIRT_BASE >> 39) & PTE_INDEX_MASK;
+        @as(*[512]PageTableEntry, @ptrCast(pml4))[pml4_index].set_address(pml4_phys);
+        @as(*[512]PageTableEntry, @ptrCast(pml4))[pml4_index].set_flags(arch.PTE.P | arch.PTE.W);
         
         const addr_space = pmm.slab_alloc(AddressSpace) orelse return null;
         addr_space.* = .{
@@ -465,16 +464,24 @@ pub const VirtualMemoryManager = struct {
         // Map kernel code and data
         // TODO: Implement proper kernel mapping
         
-        // With direct mapping, hardware addresses are already accessible
-        // Just ensure the VGA buffer is properly mapped
-        try self.kernel_space.map_page(arch.MEMORY_LAYOUT.VGA_BUFFER_VIRT, arch.MEMORY_LAYOUT.VGA_BUFFER_PHYS, arch.PTE.P | arch.PTE.W | arch.PTE.CD);
+        // Map VGA buffer with proper flags
+        try self.kernel_space.map_page(arch.MEMORY_LAYOUT.VGA_BUFFER_VIRT, arch.MEMORY_LAYOUT.VGA_BUFFER_PHYS, arch.PTE.P | arch.PTE.W | arch.PTE.WT);
+        
+        // Map VGA control registers
+        try self.kernel_space.map_page(arch.MEMORY_LAYOUT.VGA_CTRL_REGS_VIRT, arch.MEMORY_LAYOUT.VGA_CTRL_REGS_PHYS, arch.PTE.P | arch.PTE.W);
         
         // Map serial ports
         try self.kernel_space.map_page(arch.MEMORY_LAYOUT.SERIAL_PORT_VIRT, arch.MEMORY_LAYOUT.SERIAL_PORT_PHYS, arch.PTE.P | arch.PTE.W);
         
-        // Map other important hardware registers
-        try self.kernel_space.map_page(arch.MEMORY_LAYOUT.VGA_CTRL_REGS_VIRT, arch.MEMORY_LAYOUT.VGA_CTRL_REGS_PHYS, arch.PTE.P | arch.PTE.W); // VGA control registers
-        try self.kernel_space.map_page(arch.MEMORY_LAYOUT.VGA_CTRL_REGS_VIRT + 1, arch.MEMORY_LAYOUT.VGA_CTRL_REGS_PHYS + 1, arch.PTE.P | arch.PTE.W); // VGA control registers
+        // Create direct mapping for physical memory access
+        const direct_map_size = arch.MEMORY_LAYOUT.DIRECT_MAPPING_SIZE;
+        const direct_map_pages = direct_map_size / PAGE_SIZE;
+        var i: usize = 0;
+        while (i < direct_map_pages) : (i += 1) {
+            const phys_addr = @as(u64, i) * PAGE_SIZE;
+            const virt_addr = arch.MEMORY_LAYOUT.DIRECT_MAPPING_BASE + phys_addr;
+            try self.kernel_space.map_page(virt_addr, phys_addr, arch.PTE.P | arch.PTE.W);
+        }
         
         serial.write("vmm: kernel mapping setup complete\n");
     }

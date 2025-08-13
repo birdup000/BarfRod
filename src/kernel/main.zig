@@ -511,6 +511,16 @@ fn show_boot_screen() void {
         vga.set_color(.Green, .Black);
         vga.vga_write_line("VGA Access Test: PASSED");
         
+        // Run enhanced test
+        vga.vga_write_line("Running enhanced VGA test...");
+        if (vga_instance.enhanced_vga_test()) {
+            vga.set_color(.Green, .Black);
+            vga.vga_write_line("VGA Enhanced Test: PASSED");
+        } else {
+            vga.set_color(.Yellow, .Black);
+            vga.vga_write_line("VGA Enhanced Test: PARTIAL (basic works)");
+        }
+        
         // Run comprehensive test
         vga.vga_write_line("Running comprehensive VGA test...");
         _ = vga_instance.comprehensive_test();
@@ -520,6 +530,19 @@ fn show_boot_screen() void {
     } else {
         vga.set_color(.Red, .Black);
         vga.vga_write_line("VGA Test: FAILED");
+        
+        // Try to fall back to physical addressing
+        vga_instance.set_color(.Yellow, .Black);
+        vga.vga_write_line("Attempting fallback to physical addressing...");
+        vga_instance.buffer = @as([*]volatile u16, @ptrFromInt(arch.MEMORY_LAYOUT.VGA_BUFFER_PHYS));
+        
+        if (vga_instance.test_vga_access()) {
+            vga_instance.set_color(.Green, .Black);
+            vga.vga_write_line("VGA Physical Access Test: PASSED");
+        } else {
+            vga_instance.set_color(.Red, .Black);
+            vga.vga_write_line("VGA Physical Access Test: FAILED");
+        }
     }
 }
 
