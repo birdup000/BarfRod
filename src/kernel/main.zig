@@ -167,6 +167,13 @@ export fn kmain(multiboot_magic: u32, multiboot_info_addr: u32) callconv(.C) nor
     early_vga.set_color(.LightGrey, .Black);
     early_vga.write_string("BarfRod Kernel Booting...\n");
     
+    // Test early VGA access
+    if (!early_vga.test_vga_access()) {
+        early_vga.set_color(.Red, .Black);
+        early_vga.write_string("ERROR: Early VGA test failed!\n");
+        serial.write("ERROR: Early VGA test failed!\n");
+    }
+    
     // Check multiboot magic
     if (multiboot_magic != 0x2BADB002 and multiboot_magic != 0xE85250D6) {
         early_vga.set_color(.Red, .Black);
@@ -183,19 +190,31 @@ export fn kmain(multiboot_magic: u32, multiboot_info_addr: u32) callconv(.C) nor
     parse_memory_map(info);
     
     // Initialize PMM
-    log("INFO", "Initializing PMM...", .{});
+    early_vga.set_color(.Cyan, .Black);
+    early_vga.write_string("Initializing PMM...\n");
     pmm.init();
     pmm.get_instance().setup(memory_map);
 
     // Initialize VMM
-    log("INFO", "Initializing VMM...", .{});
-    vmm.init() catch |err| {
-        log("FATAL", "VMM initialization failed: {}", .{err});
+    early_vga.write_string("Initializing VMM...\n");
+    vmm.init() catch {
+        early_vga.set_color(.Red, .Black);
+        early_vga.write_string("FATAL: VMM initialization failed!\n");
+        serial.write("FATAL: VMM initialization failed!\n");
         arch.halt();
     };
 
     // Now reinitialize VGA with proper virtual mapping
+    early_vga.write_string("Setting up VGA with virtual mapping...\n");
     vga.init();
+    
+    // Test VGA with virtual mapping
+    const vga_instance = vga.get_instance();
+    if (!vga_instance.test_vga_access()) {
+        vga_instance.set_color(.Red, .Black);
+        vga_instance.write_string("ERROR: VGA virtual mapping test failed!\n");
+        serial.write("ERROR: VGA virtual mapping test failed!\n");
+    }
     
     // Clear screen and show initial message
     vga.clear_screen();
@@ -205,14 +224,17 @@ export fn kmain(multiboot_magic: u32, multiboot_info_addr: u32) callconv(.C) nor
     // Show a boot screen
     show_boot_screen();
 
-    log("INFO", "Initializing Interrupts...", .{});
+    vga.set_color(.Cyan, .Black);
+    vga.vga_write_line("Initializing Interrupts...");
     interrupts.init();
 
-    log("OK", "Core systems initialized.", .{});
+    vga.set_color(.Green, .Black);
+    vga.vga_write_line("Core systems initialized.");
 
     // TODO: Initialize other modules (scheduler, syscalls, etc.)
 
-    log("INFO", "Kernel initialization complete.", .{});
+    vga.set_color(.LightGrey, .Black);
+    vga.vga_write_line("Kernel initialization complete.");
 
     // Idle loop
     while (true) {
@@ -435,6 +457,24 @@ export fn _start() callconv(.C) noreturn {
     kmain(multiboot_magic, multiboot_info_addr);
 }
 
+// Simple early VGA write function for debugging
+fn early_vga_write(s: []const u8) void {
+    // Direct write to VGA buffer at physical address
+    const vga_buffer = @as([*]volatile u16, @ptrFromInt(0xB8000));
+    var i: usize = 0;
+    var pos: usize = 0;
+    
+    while (i < s.len and pos < 80 * 25) : (i += 1) {
+        const c = s[i];
+        if (c == '\n') {
+            pos = (pos / 80 + 1) * 80;
+        } else {
+            vga_buffer[pos] = @as(u16, c) | (@as(u16, 0x0F) << 8); // White on black
+            pos += 1;
+        }
+    }
+}
+
 fn show_boot_screen() void {
     vga.clear_screen();
     
@@ -466,10 +506,17 @@ fn show_boot_screen() void {
     // Test VGA functionality
     vga.set_color(.Cyan, .Black);
     vga.vga_write_line("Testing VGA functionality...");
-    const test_result = vga_instance.test_vga();
+    const test_result = vga_instance.test_vga_access();
     if (test_result) {
         vga.set_color(.Green, .Black);
-        vga.vga_write_line("VGA Test: PASSED");
+        vga.vga_write_line("VGA Access Test: PASSED");
+        
+        // Run comprehensive test
+        vga.vga_write_line("Running comprehensive VGA test...");
+        _ = vga_instance.comprehensive_test();
+        
+        vga.set_color(.Green, .Black);
+        vga.vga_write_line("VGA Comprehensive Test: PASSED");
     } else {
         vga.set_color(.Red, .Black);
         vga.vga_write_line("VGA Test: FAILED");

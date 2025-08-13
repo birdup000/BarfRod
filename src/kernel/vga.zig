@@ -4,7 +4,7 @@ const arch = @import("arch.zig");
 // VGA text mode constants
 pub const VGA_WIDTH = 80;
 pub const VGA_HEIGHT = 25;
-const VGA_BUFFER_PHYS_ADDR = 0xB8000;
+const VGA_BUFFER_PHYS_ADDR = arch.MEMORY_LAYOUT.VGA_BUFFER_PHYS;
 const VGA_BUFFER_ADDR = arch.MEMORY_LAYOUT.VGA_BUFFER_VIRT; // Kernel virtual mapping
 const VGA_CTRL_REGS_ADDR = arch.MEMORY_LAYOUT.VGA_CTRL_REGS_VIRT;
 
@@ -55,6 +55,15 @@ pub const VGA = struct {
         };
         vga.clear_screen();
         vga.enable_cursor(true);
+        
+        // Verify that virtual mapping is working
+        if (!vga.test_vga_access()) {
+            // Fall back to physical address if virtual mapping fails
+            vga.buffer = @as([*]volatile u16, @ptrFromInt(VGA_BUFFER_PHYS_ADDR));
+            vga.clear_screen();
+            vga.enable_cursor(true);
+        }
+        
         return vga;
     }
     
@@ -67,8 +76,17 @@ pub const VGA = struct {
             .fg_color = .LightGrey,
             .bg_color = .Black,
         };
-        vga.clear_screen();
-        vga.enable_cursor(true);
+        
+        // Test if we can even access the physical VGA buffer
+        if (!vga.test_vga_access()) {
+            // If we can't access VGA, try to at least set up the structure
+            // This will help prevent crashes even if display doesn't work
+            vga.buffer = @as([*]volatile u16, @ptrFromInt(0x1000)); // Use a safe address
+        } else {
+            vga.clear_screen();
+            vga.enable_cursor(true);
+        }
+        
         return vga;
     }
 
@@ -177,6 +195,28 @@ pub const VGA = struct {
         }
     }
     
+    // Test if VGA is working by writing to a specific location and reading back
+    pub fn test_vga_access(self: *VGA) bool {
+        // Save original character
+        const original = self.buffer[0];
+        
+        // Write test character
+        self.buffer[0] = vga_entry('A', .White, .Black);
+        
+        // Small delay
+        var i: u32 = 0;
+        while (i < 10000) : (i += 1) {}
+        
+        // Read back
+        const read_back = self.buffer[0];
+        
+        // Restore original
+        self.buffer[0] = original;
+        
+        // Check if test character was written correctly
+        return (read_back & 0xFF) == 'A';
+    }
+    
     // Test VGA functionality by writing a test pattern
     pub fn test_vga(self: *VGA) bool {
         // Save current state
@@ -198,6 +238,77 @@ pub const VGA = struct {
         self.write_string("OK");
         
         self.write_byte('\n');
+        
+        // Restore state
+        self.cursor_x = old_x;
+        self.cursor_y = old_y;
+        self.fg_color = old_fg;
+        self.bg_color = old_bg;
+        self.update_cursor();
+        
+        return true;
+    }
+    
+    // Comprehensive test of VGA functionality
+    pub fn comprehensive_test(self: *VGA) bool {
+        // Save current state
+        const old_x = self.cursor_x;
+        const old_y = self.cursor_y;
+        const old_fg = self.fg_color;
+        const old_bg = self.bg_color;
+        
+        // Clear screen
+        self.clear_screen();
+        
+        // Test 1: Basic character writing
+        self.cursor_x = 0;
+        self.cursor_y = 0;
+        self.set_color(.White, .Black);
+        self.write_string("VGA Test 1: Basic writing");
+        self.write_byte('\n');
+        
+        // Test 2: Color changes
+        self.set_color(.Red, .Black);
+        self.write_string("RED ");
+        self.set_color(.Green, .Black);
+        self.write_string("GREEN ");
+        self.set_color(.Blue, .Black);
+        self.write_string("BLUE\n");
+        
+        // Test 3: Cursor movement
+        self.cursor_x = 10;
+        self.cursor_y = 5;
+        self.set_color(.Cyan, .Black);
+        self.write_string("Cursor at (10,5)");
+        self.update_cursor();
+        
+        // Test 4: Scrolling
+        self.cursor_y = 20;
+        self.write_string("Testing scroll...\n");
+        for (0..10) |_| {
+            self.write_string("This should cause scrolling\n");
+        }
+        
+        // Test 5: Special characters
+        self.cursor_x = 0;
+        self.cursor_y = 10;
+        self.set_color(.Magenta, .Black);
+        self.write_string("Special chars: ");
+        self.write_byte('\t');
+        self.write_string("TAB");
+        self.write_byte('\r');
+        self.write_string("CR");
+        self.write_byte('\n');
+        
+        // Test 6: Fill screen
+        self.set_color(.Yellow, .Blue);
+        for (0..VGA_HEIGHT) |y| {
+            for (0..VGA_WIDTH) |x| {
+                if (y == 0 or y == VGA_HEIGHT - 1 or x == 0 or x == VGA_WIDTH - 1) {
+                    self.put_char_at(@as(u8, @intCast(x)), @as(u8, @intCast(y)), '#');
+                }
+            }
+        }
         
         // Restore state
         self.cursor_x = old_x;

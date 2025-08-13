@@ -465,15 +465,16 @@ pub const VirtualMemoryManager = struct {
         // Map kernel code and data
         // TODO: Implement proper kernel mapping
         
-        // Map VGA buffer with proper caching
-        try self.kernel_space.map_page(0xB8000, 0xB8000, arch.PTE.P | arch.PTE.W | arch.PTE.CD);
+        // With direct mapping, hardware addresses are already accessible
+        // Just ensure the VGA buffer is properly mapped
+        try self.kernel_space.map_page(arch.MEMORY_LAYOUT.VGA_BUFFER_VIRT, arch.MEMORY_LAYOUT.VGA_BUFFER_PHYS, arch.PTE.P | arch.PTE.W | arch.PTE.CD);
         
         // Map serial ports
-        try self.kernel_space.map_page(0x3F8, 0x3F8, arch.PTE.P | arch.PTE.W);
+        try self.kernel_space.map_page(arch.MEMORY_LAYOUT.SERIAL_PORT_VIRT, arch.MEMORY_LAYOUT.SERIAL_PORT_PHYS, arch.PTE.P | arch.PTE.W);
         
         // Map other important hardware registers
-        try self.kernel_space.map_page(0x3D4, 0x3D4, arch.PTE.P | arch.PTE.W); // VGA control registers
-        try self.kernel_space.map_page(0x3D5, 0x3D5, arch.PTE.P | arch.PTE.W); // VGA control registers
+        try self.kernel_space.map_page(arch.MEMORY_LAYOUT.VGA_CTRL_REGS_VIRT, arch.MEMORY_LAYOUT.VGA_CTRL_REGS_PHYS, arch.PTE.P | arch.PTE.W); // VGA control registers
+        try self.kernel_space.map_page(arch.MEMORY_LAYOUT.VGA_CTRL_REGS_VIRT + 1, arch.MEMORY_LAYOUT.VGA_CTRL_REGS_PHYS + 1, arch.PTE.P | arch.PTE.W); // VGA control registers
         
         serial.write("vmm: kernel mapping setup complete\n");
     }
