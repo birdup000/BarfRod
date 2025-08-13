@@ -119,12 +119,64 @@ fn init_serial() void {
     serial.init();
 }
 
-// Initialize VGA
-fn init_vga() void {
+fn print_logo() void {
+    vga.set_color(.LightRed, .Black);
+    vga.vga_write_line(" ____          ____   ___   ____    ___   ____  ");
+    vga.vga_write_line("|    \\ |      |    | /   \\ |    \\  /   \\ |    \\ ");
+    vga.vga_write_line("|    | |      |    | |   | |    |  |   | |    | ");
+    vga.vga_write_line("|    | |      |    | |   | |    |  |   | |    | ");
+    vga.vga_write_line("|    | |      |    | |   | |    |  |   | |    | ");
+    vga.vga_write_line("|    | |      |    | |   | |    |  |   | |    | ");
+    vga.vga_write_line("|    / |____  |____| \\___/ |____/  \\___/ |____/ ");
+    vga.vga_write_line("");
+}
+
+fn log(comptime level: []const u8, comptime format: []const u8, args: anytype) void {
+    vga.set_color(.Cyan, .Black);
+    vga.vga_write("[");
+    vga.vga_write(level);
+    vga.vga_write("] ");
+    vga.set_color(.LightGrey, .Black);
+    // vga.vga_write(std.fmt.allocPrint(std.heap.page_allocator, format, args) catch "format error");
+    _ = format;
+    _ = args;
+}
+
+// Kernel entry point
+export fn kmain() callconv(.C) noreturn {
+    // Initialize serial first for logging
+    serial.init();
+    serial.write("Kernel starting...\n");
+
+    // Initialize VGA
     vga.init();
-    vga.vga_write("BarfRod Kernel v2.0\n");
-    vga.vga_write("Redesigned Architecture\n");
-    vga.vga_write("========================\n");
+
+    // Show a boot screen
+    show_boot_screen();
+
+    log("INFO", "Initializing PMM...", .{});
+    pmm.init();
+
+    log("INFO", "Initializing VMM...", .{});
+    vmm.init() catch |err| {
+        log("FATAL", "VMM initialization failed!", .{});
+        _ = err;
+        arch.halt();
+    };
+
+    log("INFO", "Initializing Interrupts...", .{});
+    interrupts.init();
+
+    log("OK", "Core systems initialized.", .{});
+
+    // TODO: Initialize other modules (scheduler, syscalls, etc.)
+
+    log("INFO", "Kernel initialization complete.", .{});
+
+    // Idle loop
+    while (true) {
+        arch.halt();
+    }
 }
 
 // Parse memory map from multiboot info
@@ -299,76 +351,6 @@ fn init_cpu_features() void {
     serial.write("cpu: features enabled\n");
 }
 
-// Kernel main function
-fn kernel_main() !void {
-    // Initialize CPU features
-    init_cpu_features();
-    
-    // Initialize GDT and TSS
-    init_gdt();
-    init_tss();
-    
-    // Initialize memory managers
-    init_pmm();
-    init_vmm() catch {};
-    init_heap();
-    
-    // Initialize interrupt system
-    init_interrupts();
-    
-    // Initialize process manager
-    init_process_manager() catch {};
-    
-    // Initialize system call interface
-    init_syscall();
-    
-    // Enable interrupts
-    interrupts.enable_interrupts();
-    
-    // Mark kernel as initialized
-    kernel_initialized = true;
-    
-    vga.vga_write("Kernel initialization complete!\n\n");
-    
-    // Start the first user process
-    // TODO: Create and start init process
-    
-    // Run test suite
-    const test_suite = @import("test.zig");
-    test_suite.run_all_tests();
-    
-    // Enter main loop
-    kernel_loop();
-}
-
-// Kernel main loop
-fn kernel_loop() noreturn {
-    serial.write("kernel: entering main loop\n");
-    vga.vga_write("Entering kernel main loop...\n");
-    
-    // Initialize CLI with a fixed buffer allocator
-    const cli = @import("cli.zig");
-    var cli_allocator_buffer: [1024]u8 = undefined;
-    var fba = std.heap.FixedBufferAllocator.init(&cli_allocator_buffer);
-    var shell = cli.CLI.init(fba.allocator());
-    shell.show_prompt();
-    
-    while (true) {
-        // Check for keyboard input
-        if (arch.inb(0x64) & 1 != 0) {
-            const scancode = arch.inb(0x60);
-            if (scancode & 0x80 == 0) { // Only process key presses (ignore releases)
-                const ch = scancode_to_ascii(scancode);
-                if (ch != 0) {
-                    cli.handle_key_event(&shell, ch);
-                }
-            }
-        }
-        
-        // Small delay to prevent busy waiting
-        arch.pause();
-    }
-}
 
 // Simple scancode to ASCII mapping
 fn scancode_to_ascii(scancode: u8) u8 {
@@ -397,111 +379,82 @@ export fn _start() callconv(.C) noreturn {
         : "rsp"
     );
 
-    // Basic VGA test
-    const vga_buffer = @as(*volatile [25][80]u16, @ptrFromInt(0xB8000));
+    kmain();
+}
+
+fn show_boot_screen() void {
+    vga.clear_screen();
     
-    // Clear screen
-    for (0..25) |y| {
-        for (0..80) |x| {
-            vga_buffer[y][x] = 0x0F00 | ' ';
-        }
+    print_logo();
+
+    vga.set_color(.Green, .Black);
+    move_cursor(10, 15);
+    vga.vga_write("Booting: [");
+    
+    const progress_bar_width = 50;
+    for (0..progress_bar_width) |i| {
+        vga.vga_write("#");
+        // A small delay to simulate loading
+        var j: u32 = 0;
+        while (j < 100000) : (j += 1) {}
     }
     
-    // Simple static message
-    const msg = "BarfRod Kernel";
-    for (0..msg.len) |i| {
-        vga_buffer[0][i] = @as(u16, 0x1F00) | @as(u16, msg[i]);
-    }
+    vga.vga_write("]");
     
-    // Hang forever
-    while (true) {
-        asm volatile ("hlt");
+    vga.set_color(.LightGrey, .Black);
+    move_cursor(0, 17);
+    vga.vga_write_line("");
+}
+
+// Helper to draw a box on the screen
+fn draw_box(x1: u8, y1: u8, x2: u8, y2: u8, color: vga.Color) void {
+    vga.set_color(color, vga.get_instance().bg_color);
+
+    const h_char = 205; // '═'
+    const v_char = 186; // '║'
+    const tl_char = 201; // '╔'
+    const tr_char = 187; // '╗'
+    const bl_char = 200; // '╚'
+    const br_char = 188; // '╝'
+
+    // Draw corners
+    put_char_at(x1, y1, tl_char);
+    put_char_at(x2, y1, tr_char);
+    put_char_at(x1, y2, bl_char);
+    put_char_at(x2, y2, br_char);
+
+    // Draw horizontal lines
+    for (x1 + 1..x2) |x| {
+        put_char_at(x, y1, h_char);
+        put_char_at(x, y2, h_char);
+    }
+
+    // Draw vertical lines
+    for (y1 + 1..y2) |y| {
+        put_char_at(x1, y, v_char);
+        put_char_at(x2, y, v_char);
     }
 }
 
-// Enhanced boot screen with VGA output only
-fn show_boot_animation() void {
-    const total_steps = 40;
-    const start_y = 8;
-    
-    // Clear screen and set colors
-    vga.vga_clear();
-    vga.set_colors(.LightCyan, .Black);
-    
-    // Draw decorative border using existing functions
-    vga.draw_box(10, start_y - 5, 70, start_y + 7);
-    vga.draw_box(11, start_y - 4, 69, start_y + 6);
-    
-    // Draw title box
-    vga.draw_box(25, start_y - 3, 55, start_y - 1);
-    vga.move_cursor(30, start_y - 2);
-    vga.vga_write_colored(" BARFROD KERNEL v2.0 ", .LightGreen, .Black);
-    
-    // Draw progress bar container
-    vga.draw_box(20, start_y + 1, 60, start_y + 3);
-    
-    // Initial status message
-    vga.move_cursor(22, start_y);
-    vga.vga_write_colored("Initializing system components...", .White, .Black);
-    
-    // Animated progress bar with color transition
-    for (0..total_steps) |step| {
-        vga.move_cursor(21, start_y + 2);
-        const progress = @as(f32, @floatFromInt(step)) / @as(f32, @floatFromInt(total_steps));
-        const filled = @min(38, @as(usize, @intFromFloat(progress * 38)));
-        
-        // Color transition from blue to green
-        const color = @as(u8, @intFromFloat(progress * 15)) + 1; // 1-16
-        
-        // Draw filled portion
-        for (0..filled) |_| {
-            // Convert color index to valid Color enum
-            const colors = [_]vga.Color{
-                .Blue, .Green, .Cyan, .Red, .Magenta, .Brown,
-                .LightGrey, .DarkGrey, .LightBlue, .LightGreen,
-                .LightCyan, .LightRed, .LightMagenta, .LightBrown, .White
-            };
-            const anim_color = colors[color % colors.len];
-            vga.vga_write_colored("█", anim_color, .Black);
-        }
-        
-        // Draw empty portion
-        for (filled..38) |_| {
-            vga.vga_write_colored("░", .DarkGrey, .Black);
-        }
-        
-        // Update status text with different phases
-        vga.move_cursor(22, start_y);
-        switch (step) {
-            0...9 => vga.vga_write_colored("Detecting hardware...      ", .White, .Black),
-            10...19 => vga.vga_write_colored("Initializing memory...     ", .White, .Black),
-            20...29 => vga.vga_write_colored("Loading subsystems...      ", .White, .Black),
-            30...39 => vga.vga_write_colored("Starting services...       ", .White, .Black),
-            else => {},
-        }
-        
-        delay_milliseconds(50);
-    }
-    
-    // Completion animation
-    vga.move_cursor(25, start_y + 5);
-    vga.vga_write_colored("╔════════════════════════════╗", .LightGreen, .Black);
-    vga.move_cursor(25, start_y + 6);
-    vga.vga_write_colored("║ System ready. Booting...   ║", .LightGreen, .Black);
-    vga.move_cursor(25, start_y + 7);
-    vga.vga_write_colored("╚════════════════════════════╝", .LightGreen, .Black);
-    
-    // Pulsing effect
-    for (0..3) |i| {
-        delay_milliseconds(300);
-        vga.move_cursor(25, start_y + 6);
-        vga.vga_write_colored("║ System ready. Booting...   ║",
-            if (i % 2 == 0) .LightGreen else .Green, .Black);
-    }
-    
-    // Clear for kernel output
-    delay_milliseconds(500);
-    vga.vga_clear();
+// Helper to put a character at a specific location
+fn put_char_at(x: u8, y: u8, char: u8) void {
+    const vga_instance = vga.get_instance();
+    const index = y * vga.VGA_WIDTH + x;
+    const entry = vga_entry(char, vga_instance.fg_color, vga_instance.bg_color);
+    vga_instance.buffer[index] = entry;
+}
+
+// Helper to create a 16-bit VGA entry
+fn vga_entry(char: u8, fg: vga.Color, bg: vga.Color) u16 {
+    const color = @intFromEnum(fg) | (@intFromEnum(bg) << 4);
+    return @as(u16, char) | (@as(u16, color) << 8);
+}
+
+fn move_cursor(x: u8, y: u8) void {
+    const vga_instance = vga.get_instance();
+    vga_instance.cursor_x = x;
+    vga_instance.cursor_y = y;
+    vga_instance.update_cursor();
 }
 
 // Assembly interrupt wrappers
