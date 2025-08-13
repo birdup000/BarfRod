@@ -94,21 +94,24 @@ pub fn panic(msg: []const u8, error_return_trace: ?*std.builtin.StackTrace, ret_
     }
 }
 
-// Simple delay function
-fn delay_microseconds(us: u64) void {
-    const start = arch.read_msr(0x10); // TSC
-    const end = start + us * 1000; // Rough approximation
-    
-    while (arch.read_msr(0x10) < end) {
+// Initialize PIT (Programmable Interval Timer)
+fn init_pit() void {
+    // Configure PIT to 1000 Hz (1193182 / 1193 ≈ 1000)
+    arch.outb(0x43, 0x36);
+    arch.outb(0x40, 0xA9); // Low byte
+    arch.outb(0x40, 0x04); // High byte
+}
+
+// Simple delay function using PIT
+fn delay_milliseconds(ms: u64) void {
+    const target = arch.get_ticks() + ms;
+    while (arch.get_ticks() < target) {
         arch.pause();
     }
 }
 
 fn delay_seconds(seconds: u64) void {
-    var i: u64 = 0;
-    while (i < seconds) : (i += 1) {
-        delay_microseconds(1000000);
-    }
+    delay_milliseconds(seconds * 1000);
 }
 
 // Initialize serial port
@@ -348,17 +351,43 @@ fn kernel_loop() noreturn {
     serial.write("kernel: entering main loop\n");
     vga.vga_write("Entering kernel main loop...\n");
     
+    // Initialize CLI with a fixed buffer allocator
+    const cli = @import("cli.zig");
+    var cli_allocator_buffer: [1024]u8 = undefined;
+    var fba = std.heap.FixedBufferAllocator.init(&cli_allocator_buffer);
+    var shell = cli.CLI.init(fba.allocator());
+    shell.show_prompt();
+    
     while (true) {
-        // Schedule processes
-        const manager = process.get_manager();
-        _ = manager.schedule();
-        
-        // Handle any pending interrupts
-        // This is done automatically by the interrupt handlers
+        // Check for keyboard input
+        if (arch.inb(0x64) & 1 != 0) {
+            const scancode = arch.inb(0x60);
+            if (scancode & 0x80 == 0) { // Only process key presses (ignore releases)
+                const ch = scancode_to_ascii(scancode);
+                if (ch != 0) {
+                    cli.handle_key_event(&shell, ch);
+                }
+            }
+        }
         
         // Small delay to prevent busy waiting
         arch.pause();
     }
+}
+
+// Simple scancode to ASCII mapping
+fn scancode_to_ascii(scancode: u8) u8 {
+    const table = "????????????? `?" ++  // 00-0F
+                  "?????q1???zsaw2?" ++  // 10-1F
+                  "?cxde43? vftr5?" ++   // 20-2F
+                  "?nbhgy6? mju78?" ++   // 30-3F
+                  "?,kio09??./l;p-?" ++  // 40-4F
+                  "??'?[=?";             // 50-57
+    
+    if (scancode < 0x58) {
+        return table[scancode];
+    }
+    return 0;
 }
 
 // Kernel entry point
@@ -388,6 +417,9 @@ export fn _start() callconv(.C) noreturn {
     init_serial();
     init_vga();
     
+    // Show boot animation
+    show_boot_animation();
+    
     serial.write("kernel: starting up...\n");
     serial.write("kernel: multiboot info at 0x");
     serial.write_hex(@as(u64, @intFromPtr(info_ptr)));
@@ -407,6 +439,34 @@ export fn _start() callconv(.C) noreturn {
     
     // Should never reach here
     while (true) arch.halt();
+}
+
+// Show boot animation with progress bar
+fn show_boot_animation() void {
+    const total_steps = 20;
+    const start_y = 2;
+    
+    vga.move_cursor(0, start_y);
+    vga.vga_write("Booting BarfRod Kernel...");
+    
+    // Draw progress bar
+    for (0..total_steps) |step| {
+        vga.move_cursor(0, start_y + 1);
+        for (0..step) |_| {
+            vga.vga_write_colored("=", .LightGreen, .Black);
+        }
+        for (step..total_steps) |_| {
+            vga.vga_write_colored(" ", .Black, .Black);
+        }
+        vga.vga_write("]");
+        
+        // Simulate work being done
+        delay_milliseconds(100); // 100ms delay between steps
+    }
+    
+    vga.move_cursor(0, start_y + 2);
+    vga.vga_write("Boot complete! Starting kernel...");
+    delay_milliseconds(500); // 500ms delay
 }
 
 // Assembly interrupt wrappers

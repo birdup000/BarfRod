@@ -1,6 +1,7 @@
 // Architecture-specific definitions and utilities for x86_64
 
 const std = @import("std");
+const interrupts = @import("interrupts.zig");
 
 // CPU registers structure for context switching
 pub const Registers = extern struct {
@@ -609,4 +610,28 @@ pub fn get_cpu_features() CpuFeatures {
     }
     
     return features;
+}
+
+// Global tick counter
+var tick_count: u64 = 0;
+
+// Get current tick count
+pub fn get_ticks() u64 {
+    return tick_count;
+}
+
+// PIT timer interrupt handler
+fn timer_handler() void {
+    tick_count += 1;
+}
+
+// Initialize PIT (Programmable Interval Timer)
+pub fn init_pit() void {
+    // Configure PIT to 1000 Hz (1193182 / 1193 ≈ 1000)
+    outb(0x43, 0x36);
+    outb(0x40, 0xA9); // Low byte
+    outb(0x40, 0x04); // High byte
+
+    // Register timer interrupt handler
+    interrupts.register_irq_handler(0, timer_handler);
 }

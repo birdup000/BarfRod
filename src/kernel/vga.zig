@@ -324,8 +324,7 @@ pub fn init() void {
     const crt_value = arch.inb(0x3D5); // Read current value
     arch.outb(0x3D5, crt_value & 0x7F); // Clear bit 7 (protect from writes)
     
-    // Clear screen
-    vga_clear();
+    // Don't clear screen here to preserve early boot messages
     
     // Set cursor scan lines (cursor shape)
     arch.outb(0x3D4, 0x0A); // Cursor start register
@@ -342,7 +341,9 @@ pub fn init() void {
     // Update cursor position
     update_cursor();
     
-    // Display initialization message
+    // Display initialization message below existing content
+    const current_pos = get_cursor_position();
+    move_cursor(0, current_pos.y + 1);
     vga_write_line("VGA display initialized");
 }
 
