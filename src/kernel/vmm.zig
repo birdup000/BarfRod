@@ -158,7 +158,7 @@ pub const AddressSpace = struct {
         // Self-map the PML4 (recursive mapping)
         const pml4_index = (arch.MEMORY_LAYOUT.KERNEL_VIRT_BASE >> 39) & PTE_INDEX_MASK;
         @as(*[512]PageTableEntry, @ptrCast(pml4))[pml4_index].set_address(pml4_phys);
-        @as(*[512]PageTableEntry, @ptrCast(pml4))[pml4_index].set_flags(arch.PTE.P | arch.PTE.W);
+        @as(*[512]PageTableEntry, @ptrCast(pml4))[pml4_index].set_flags((1 << 0) | (1 << 1)); // Present | Write
         
         const addr_space = pmm.slab_alloc(AddressSpace) orelse return null;
         addr_space.* = .{
@@ -340,7 +340,7 @@ pub const AddressSpace = struct {
             }
             
             @as(*[512]PageTableEntry, @ptrCast(pml4))[pml4_index].set_address(pdpt_phys);
-            @as(*[512]PageTableEntry, @ptrCast(pml4))[pml4_index].set_flags(arch.PTE.P | arch.PTE.W);
+            @as(*[512]PageTableEntry, @ptrCast(pml4))[pml4_index].set_flags((1 << 0) | (1 << 1)); // Present | Write
         }
         pdpt = @as(*PageTableEntry, @ptrFromInt(arch.MEMORY_LAYOUT.KERNEL_VIRT_BASE + @as(*[512]PageTableEntry, @ptrCast(pml4))[pml4_index].get_address()));
         
@@ -357,7 +357,7 @@ pub const AddressSpace = struct {
             }
             
             @as(*[512]PageTableEntry, @ptrCast(pdpt))[pdpt_index].set_address(pd_phys);
-            @as(*[512]PageTableEntry, @ptrCast(pdpt))[pdpt_index].set_flags(arch.PTE.P | arch.PTE.W);
+            @as(*[512]PageTableEntry, @ptrCast(pdpt))[pdpt_index].set_flags((1 << 0) | (1 << 1)); // Present | Write
         }
         pd = @as(*PageTableEntry, @ptrFromInt(arch.MEMORY_LAYOUT.KERNEL_VIRT_BASE + @as(*[512]PageTableEntry, @ptrCast(pdpt))[pdpt_index].get_address()));
         
@@ -374,7 +374,7 @@ pub const AddressSpace = struct {
             }
             
             @as(*[512]PageTableEntry, @ptrCast(pd))[pd_index].set_address(pt_phys);
-            @as(*[512]PageTableEntry, @ptrCast(pd))[pd_index].set_flags(arch.PTE.P | arch.PTE.W);
+            @as(*[512]PageTableEntry, @ptrCast(pd))[pd_index].set_flags((1 << 0) | (1 << 1)); // Present | Write
         }
         pt = @as(*PageTableEntry, @ptrFromInt(arch.MEMORY_LAYOUT.KERNEL_VIRT_BASE + @as(*[512]PageTableEntry, @ptrCast(pd))[pd_index].get_address()));
         
@@ -464,14 +464,20 @@ pub const VirtualMemoryManager = struct {
         // Map kernel code and data
         // TODO: Implement proper kernel mapping
         
-        // Map VGA buffer with proper flags
-        try self.kernel_space.map_page(arch.MEMORY_LAYOUT.VGA_BUFFER_VIRT, arch.MEMORY_LAYOUT.VGA_BUFFER_PHYS, arch.PTE.P | arch.PTE.W | arch.PTE.WT);
+        // Define page flags
+        const FLAG_PRESENT = (1 << 0);
+        const FLAG_WRITE = (1 << 1);
+        const FLAG_WRITE_THROUGH = (1 << 3);
+        const FLAG_CACHE_DISABLE = (1 << 4);
         
-        // Map VGA control registers
-        try self.kernel_space.map_page(arch.MEMORY_LAYOUT.VGA_CTRL_REGS_VIRT, arch.MEMORY_LAYOUT.VGA_CTRL_REGS_PHYS, arch.PTE.P | arch.PTE.W);
+        // Map VGA buffer with proper flags - use write-through caching for VGA
+        try self.kernel_space.map_page(arch.MEMORY_LAYOUT.VGA_BUFFER_VIRT, arch.MEMORY_LAYOUT.VGA_BUFFER_PHYS, FLAG_PRESENT | FLAG_WRITE | FLAG_WRITE_THROUGH);
         
-        // Map serial ports
-        try self.kernel_space.map_page(arch.MEMORY_LAYOUT.SERIAL_PORT_VIRT, arch.MEMORY_LAYOUT.SERIAL_PORT_PHYS, arch.PTE.P | arch.PTE.W);
+        // Map VGA control registers - use uncached for hardware registers
+        try self.kernel_space.map_page(arch.MEMORY_LAYOUT.VGA_CTRL_REGS_VIRT, arch.MEMORY_LAYOUT.VGA_CTRL_REGS_PHYS, FLAG_PRESENT | FLAG_WRITE | FLAG_CACHE_DISABLE);
+        
+        // Map serial ports - use uncached for hardware registers
+        try self.kernel_space.map_page(arch.MEMORY_LAYOUT.SERIAL_PORT_VIRT, arch.MEMORY_LAYOUT.SERIAL_PORT_PHYS, FLAG_PRESENT | FLAG_WRITE | FLAG_CACHE_DISABLE);
         
         // Create direct mapping for physical memory access
         const direct_map_size = arch.MEMORY_LAYOUT.DIRECT_MAPPING_SIZE;
@@ -480,7 +486,7 @@ pub const VirtualMemoryManager = struct {
         while (i < direct_map_pages) : (i += 1) {
             const phys_addr = @as(u64, i) * PAGE_SIZE;
             const virt_addr = arch.MEMORY_LAYOUT.DIRECT_MAPPING_BASE + phys_addr;
-            try self.kernel_space.map_page(virt_addr, phys_addr, arch.PTE.P | arch.PTE.W);
+            try self.kernel_space.map_page(virt_addr, phys_addr, FLAG_PRESENT | FLAG_WRITE);
         }
         
         serial.write("vmm: kernel mapping setup complete\n");

@@ -72,12 +72,16 @@ pub const VGA = struct {
     pub fn switch_to_physical(self: *VGA) void {
         self.buffer = @as([*]volatile u16, @ptrFromInt(VGA_BUFFER_PHYS_ADDR));
         self.using_virtual = false;
+        // Re-initialize cursor after switching
+        self.update_cursor();
     }
 
     // Switch to virtual addressing
     pub fn switch_to_virtual(self: *VGA) void {
         self.buffer = @as([*]volatile u16, @ptrFromInt(VGA_BUFFER_ADDR));
         self.using_virtual = true;
+        // Re-initialize cursor after switching
+        self.update_cursor();
     }
 
     // Clear the screen
@@ -162,25 +166,47 @@ pub const VGA = struct {
     // Update the hardware cursor position
     pub fn update_cursor(self: *VGA) void {
         const pos = self.cursor_y * VGA_WIDTH + self.cursor_x;
-        arch.outb(0x3D4, 0x0F);
-        arch.outb(0x3D5, @as(u8, @truncate(pos & 0xFF)));
-        arch.outb(0x3D4, 0x0E);
+        
+        // Use the correct VGA control register addresses
+        const vga_ctrl_phys = arch.MEMORY_LAYOUT.VGA_CTRL_REGS_PHYS;
+        const vga_ctrl_virt = arch.MEMORY_LAYOUT.VGA_CTRL_REGS_VIRT;
+        
+        // Choose the right address based on current mode
+        const ctrl_addr = if (self.using_virtual) vga_ctrl_virt else vga_ctrl_phys;
+        
+        // Cast to u16 for outb function
+        const ctrl_port = @as(u16, @truncate(ctrl_addr));
+        const ctrl_data_port = @as(u16, @truncate(ctrl_addr + 1));
+        
+        arch.outb(ctrl_port, 0x0F);
+        arch.outb(ctrl_data_port, @as(u8, @truncate(pos & 0xFF)));
+        arch.outb(ctrl_port, 0x0E);
         const pos_u16 = @as(u16, pos);
         const high_byte = @as(u8, @truncate(pos_u16 >> 8));
-        arch.outb(0x3D5, high_byte);
+        arch.outb(ctrl_data_port, high_byte);
     }
 
     // Enable or disable the hardware cursor
     pub fn enable_cursor(self: *VGA, enable: bool) void {
-        _ = self;
+        // Use the correct VGA control register addresses
+        const vga_ctrl_phys = arch.MEMORY_LAYOUT.VGA_CTRL_REGS_PHYS;
+        const vga_ctrl_virt = arch.MEMORY_LAYOUT.VGA_CTRL_REGS_VIRT;
+        
+        // Choose the right address based on current mode
+        const ctrl_addr = if (self.using_virtual) vga_ctrl_virt else vga_ctrl_phys;
+        
+        // Cast to u16 for outb function
+        const ctrl_port = @as(u16, @truncate(ctrl_addr));
+        const ctrl_data_port = @as(u16, @truncate(ctrl_addr + 1));
+        
         if (enable) {
-            arch.outb(0x3D4, 0x0A);
-            arch.outb(0x3D5, (arch.inb(0x3D5) & 0xC0) | 14);
-            arch.outb(0x3D4, 0x0B);
-            arch.outb(0x3D5, (arch.inb(0x3D5) & 0xE0) | @as(u8, 15));
+            arch.outb(ctrl_port, 0x0A);
+            arch.outb(ctrl_data_port, (arch.inb(ctrl_data_port) & 0xC0) | 14);
+            arch.outb(ctrl_port, 0x0B);
+            arch.outb(ctrl_data_port, (arch.inb(ctrl_data_port) & 0xE0) | @as(u8, 15));
         } else {
-            arch.outb(0x3D4, 0x0A);
-            arch.outb(0x3D5, 0x20);
+            arch.outb(ctrl_port, 0x0A);
+            arch.outb(ctrl_data_port, 0x20);
         }
     }
     
@@ -213,6 +239,81 @@ pub const VGA = struct {
         self.write_string("VGA Test: OK\n");
         self.set_color(.Green, .Black);
         self.write_string("System is working\n");
+    }
+    
+    // More comprehensive test for VGA functionality
+    pub fn comprehensive_test(self: *VGA) bool {
+        var success = true;
+        
+        // Test 1: Basic character write/read
+        {
+            const original = self.buffer[0];
+            self.buffer[0] = vga_entry('A', .White, .Black);
+            var i: u32 = 0;
+            while (i < 100000) : (i += 1) {} // Small delay
+            const read_back = self.buffer[0];
+            self.buffer[0] = original;
+            if ((read_back & 0xFF) != 'A') {
+                success = false;
+            }
+        }
+        
+        // Test 2: Test cursor movement
+        {
+            const old_x = self.cursor_x;
+            const old_y = self.cursor_y;
+            
+            self.cursor_x = 10;
+            self.cursor_y = 5;
+            self.update_cursor();
+            
+            // Verify cursor position by writing at that location
+            const idx = self.cursor_y * VGA_WIDTH + self.cursor_x;
+            const original = self.buffer[idx];
+            self.buffer[idx] = vga_entry('C', .Yellow, .Black);
+            
+            var i: u32 = 0;
+            while (i < 100000) : (i += 1) {} // Small delay
+            
+            const read_back = self.buffer[idx];
+            self.buffer[idx] = original;
+            
+            self.cursor_x = old_x;
+            self.cursor_y = old_y;
+            self.update_cursor();
+            
+            if ((read_back & 0xFF) != 'C') {
+                success = false;
+            }
+        }
+        
+        // Test 3: Test scrolling
+        {
+            const old_x = self.cursor_x;
+            const old_y = self.cursor_y;
+            
+            // Move to bottom of screen
+            self.cursor_x = 0;
+            self.cursor_y = VGA_HEIGHT - 1;
+            
+            // Write enough to cause scrolling
+            for (0..VGA_HEIGHT + 1) |_| {
+                self.write_byte('X');
+            }
+            
+            // Check if scrolling occurred by looking for the character at the top
+            const scrolled_char = self.buffer[0] & 0xFF;
+            
+            self.cursor_x = old_x;
+            self.cursor_y = old_y;
+            self.update_cursor();
+            
+            if (scrolled_char != 'X') {
+                success = false;
+            }
+        }
+        
+        return success;
     }
 };
 

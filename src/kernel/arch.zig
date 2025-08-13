@@ -120,6 +120,16 @@ pub const MEMORY_LAYOUT = struct {
     // Direct mapping area for physical memory access
     pub const DIRECT_MAPPING_BASE: u64 = 0xFFFF800000000000; // Direct map of all physical memory
     pub const DIRECT_MAPPING_SIZE: u64 = 0x100000000; // 4GB
+    
+    // Helper function to convert physical to virtual address for kernel space
+    pub fn phys_to_virt(phys: u64) u64 {
+        return phys + KERNEL_VIRT_BASE;
+    }
+    
+    // Helper function to convert virtual to physical address for kernel space
+    pub fn virt_to_phys(virt: u64) u64 {
+        return virt - KERNEL_VIRT_BASE;
+    }
 };
 
 // Page size constant for direct access
