@@ -301,8 +301,6 @@ fn init_cpu_features() void {
 
 // Kernel main function
 fn kernel_main() !void {
-    serial.write("kernel: entering main function\n");
-    
     // Initialize CPU features
     init_cpu_features();
     
@@ -330,7 +328,6 @@ fn kernel_main() !void {
     // Mark kernel as initialized
     kernel_initialized = true;
     
-    serial.write("kernel: initialization complete\n");
     vga.vga_write("Kernel initialization complete!\n\n");
     
     // Start the first user process
@@ -390,66 +387,121 @@ fn scancode_to_ascii(scancode: u8) u8 {
 
 // Kernel entry point
 export fn _start() callconv(.C) noreturn {
-    // Early VGA output - direct write to test if VGA works
-    
-    // Get multiboot info
-    const info_ptr = @as(*const MultibootInfo, @ptrFromInt(arch.read_rbp() + 16));
-    multiboot_info = info_ptr;
-    
-    // Initialize early systems
-    init_serial();
-    init_vga();
-    
-    // Show boot animation
-    show_boot_animation();
-    
-    serial.write("kernel: starting up...\n");
-    serial.write("kernel: multiboot info at 0x");
-    serial.write_hex(@as(u64, @intFromPtr(info_ptr)));
-    serial.write("\n");
-    
-    // Parse memory map
-    parse_memory_map(info_ptr);
-    
-    // Call kernel main
-    kernel_main() catch |err| {
-        serial.write("kernel: failed to initialize: ");
-        // TODO: Convert error to string
-        serial.write_hex(@as(u64, @intFromError(err)));
-        serial.write("\n");
-        while (true) arch.halt();
-    };
-    
-    // Should never reach here
-    while (true) arch.halt();
-}
+    // Setup stack with static buffer (16-byte aligned)
+    const STACK_SIZE = 16 * 1024; // 16KB stack
+    var stack: [STACK_SIZE]u8 align(16) = undefined;
+    asm volatile (
+        \\mov %[stack_end], %%rsp
+        :
+        : [stack_end] "r" (@intFromPtr(&stack) + STACK_SIZE)
+        : "rsp"
+    );
 
-// Show boot animation with progress bar
-fn show_boot_animation() void {
-    const total_steps = 20;
-    const start_y = 2;
+    // Basic VGA test
+    const vga_buffer = @as(*volatile [25][80]u16, @ptrFromInt(0xB8000));
     
-    vga.move_cursor(0, start_y);
-    vga.vga_write("Booting BarfRod Kernel...");
-    
-    // Draw progress bar
-    for (0..total_steps) |step| {
-        vga.move_cursor(0, start_y + 1);
-        for (0..step) |_| {
-            vga.vga_write_colored("=", .LightGreen, .Black);
+    // Clear screen
+    for (0..25) |y| {
+        for (0..80) |x| {
+            vga_buffer[y][x] = 0x0F00 | ' ';
         }
-        for (step..total_steps) |_| {
-            vga.vga_write_colored(" ", .Black, .Black);
-        }
-        vga.vga_write("]");
-        
-        // Simulate work being done
-        delay_milliseconds(100); // 100ms delay between steps
     }
     
-    vga.move_cursor(0, start_y + 2);
-    vga.vga_write("Boot complete! Starting kernel...");
-    delay_milliseconds(500); // 500ms delay
+    // Simple static message
+    const msg = "BarfRod Kernel";
+    for (0..msg.len) |i| {
+        vga_buffer[0][i] = @as(u16, 0x1F00) | @as(u16, msg[i]);
+    }
+    
+    // Hang forever
+    while (true) {
+        asm volatile ("hlt");
+    }
+}
+
+// Enhanced boot screen with VGA output only
+fn show_boot_animation() void {
+    const total_steps = 40;
+    const start_y = 8;
+    
+    // Clear screen and set colors
+    vga.vga_clear();
+    vga.set_colors(.LightCyan, .Black);
+    
+    // Draw decorative border using existing functions
+    vga.draw_box(10, start_y - 5, 70, start_y + 7);
+    vga.draw_box(11, start_y - 4, 69, start_y + 6);
+    
+    // Draw title box
+    vga.draw_box(25, start_y - 3, 55, start_y - 1);
+    vga.move_cursor(30, start_y - 2);
+    vga.vga_write_colored(" BARFROD KERNEL v2.0 ", .LightGreen, .Black);
+    
+    // Draw progress bar container
+    vga.draw_box(20, start_y + 1, 60, start_y + 3);
+    
+    // Initial status message
+    vga.move_cursor(22, start_y);
+    vga.vga_write_colored("Initializing system components...", .White, .Black);
+    
+    // Animated progress bar with color transition
+    for (0..total_steps) |step| {
+        vga.move_cursor(21, start_y + 2);
+        const progress = @as(f32, @floatFromInt(step)) / @as(f32, @floatFromInt(total_steps));
+        const filled = @min(38, @as(usize, @intFromFloat(progress * 38)));
+        
+        // Color transition from blue to green
+        const color = @as(u8, @intFromFloat(progress * 15)) + 1; // 1-16
+        
+        // Draw filled portion
+        for (0..filled) |_| {
+            // Convert color index to valid Color enum
+            const colors = [_]vga.Color{
+                .Blue, .Green, .Cyan, .Red, .Magenta, .Brown,
+                .LightGrey, .DarkGrey, .LightBlue, .LightGreen,
+                .LightCyan, .LightRed, .LightMagenta, .LightBrown, .White
+            };
+            const anim_color = colors[color % colors.len];
+            vga.vga_write_colored("█", anim_color, .Black);
+        }
+        
+        // Draw empty portion
+        for (filled..38) |_| {
+            vga.vga_write_colored("░", .DarkGrey, .Black);
+        }
+        
+        // Update status text with different phases
+        vga.move_cursor(22, start_y);
+        switch (step) {
+            0...9 => vga.vga_write_colored("Detecting hardware...      ", .White, .Black),
+            10...19 => vga.vga_write_colored("Initializing memory...     ", .White, .Black),
+            20...29 => vga.vga_write_colored("Loading subsystems...      ", .White, .Black),
+            30...39 => vga.vga_write_colored("Starting services...       ", .White, .Black),
+            else => {},
+        }
+        
+        delay_milliseconds(50);
+    }
+    
+    // Completion animation
+    vga.move_cursor(25, start_y + 5);
+    vga.vga_write_colored("╔════════════════════════════╗", .LightGreen, .Black);
+    vga.move_cursor(25, start_y + 6);
+    vga.vga_write_colored("║ System ready. Booting...   ║", .LightGreen, .Black);
+    vga.move_cursor(25, start_y + 7);
+    vga.vga_write_colored("╚════════════════════════════╝", .LightGreen, .Black);
+    
+    // Pulsing effect
+    for (0..3) |i| {
+        delay_milliseconds(300);
+        vga.move_cursor(25, start_y + 6);
+        vga.vga_write_colored("║ System ready. Booting...   ║",
+            if (i % 2 == 0) .LightGreen else .Green, .Black);
+    }
+    
+    // Clear for kernel output
+    delay_milliseconds(500);
+    vga.vga_clear();
 }
 
 // Assembly interrupt wrappers
