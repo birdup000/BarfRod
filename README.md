@@ -2,7 +2,7 @@
 
 BarfRod is a modern x86_64 kernel written in Zig, featuring multiboot compliance, memory management, task scheduling, and an interactive command-line interface. Originally designed to use both Limine and GRUB bootloaders, it has been streamlined to use GRUB exclusively for maximum compatibility and reliability. 
  Please Note...
-- This Kernel/OS is just a hobby project 
+- This Kernel/OS is just a hobby project DO NOT EXPECT STABILITY
 ## 🚀 Features
 
 - **Multiboot-compliant**: Boots reliably with GRUB using proper multiboot headers
