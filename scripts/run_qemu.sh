@@ -19,6 +19,8 @@ QEMU_ARGS=(
   -no-reboot
   -cdrom "${ISO}"
   -boot d
+  -display sdl
+  -vga std
 )
 
 echo "[barfrod] Running QEMU..."
