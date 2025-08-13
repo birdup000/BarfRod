@@ -6,7 +6,6 @@ pub const VGA_WIDTH = 80;
 pub const VGA_HEIGHT = 25;
 const VGA_BUFFER_PHYS_ADDR = arch.MEMORY_LAYOUT.VGA_BUFFER_PHYS;
 const VGA_BUFFER_ADDR = arch.MEMORY_LAYOUT.VGA_BUFFER_VIRT; // Kernel virtual mapping
-const VGA_CTRL_REGS_ADDR = arch.MEMORY_LAYOUT.VGA_CTRL_REGS_VIRT;
 
 // VGA color constants
 pub const Color = enum(u4) {
@@ -28,14 +27,6 @@ pub const Color = enum(u4) {
     White = 15,
 };
 
-// Represents a single character on the screen
-const VGAChar = packed struct {
-    char: u8,
-    fg: Color,
-    bg: Color,
-    _padding: u4 = 0,
-};
-
 // VGA driver struct
 pub const VGA = struct {
     buffer: [*]volatile u16,
@@ -43,31 +34,8 @@ pub const VGA = struct {
     cursor_y: u8,
     fg_color: Color,
     bg_color: Color,
+    using_virtual: bool,
 
-    // Initialize the VGA driver
-    pub fn init() VGA {
-        var vga = VGA{
-            .buffer = @as([*]volatile u16, @ptrFromInt(VGA_BUFFER_ADDR)),
-            .cursor_x = 0,
-            .cursor_y = 0,
-            .fg_color = .LightGrey,
-            .bg_color = .Black,
-        };
-        
-        // Verify that virtual mapping is working
-        if (!vga.test_vga_access()) {
-            // Fall back to physical address if virtual mapping fails
-            vga.buffer = @as([*]volatile u16, @ptrFromInt(VGA_BUFFER_PHYS_ADDR));
-            vga.clear_screen();
-            vga.enable_cursor(true);
-        } else {
-            vga.clear_screen();
-            vga.enable_cursor(true);
-        }
-        
-        return vga;
-    }
-    
     // Initialize VGA with physical address (for early boot)
     pub fn init_early() VGA {
         var vga = VGA{
@@ -76,15 +44,40 @@ pub const VGA = struct {
             .cursor_y = 0,
             .fg_color = .LightGrey,
             .bg_color = .Black,
+            .using_virtual = false,
         };
         
-        // Test if we can even access the physical VGA buffer
-        if (vga.test_vga_access()) {
-            vga.clear_screen();
-            vga.enable_cursor(true);
-        }
-        
+        vga.clear_screen();
+        vga.enable_cursor(true);
         return vga;
+    }
+
+    // Initialize the VGA driver with virtual mapping
+    pub fn init() VGA {
+        var vga = VGA{
+            .buffer = @as([*]volatile u16, @ptrFromInt(VGA_BUFFER_ADDR)),
+            .cursor_x = 0,
+            .cursor_y = 0,
+            .fg_color = .LightGrey,
+            .bg_color = .Black,
+            .using_virtual = true,
+        };
+        
+        vga.clear_screen();
+        vga.enable_cursor(true);
+        return vga;
+    }
+
+    // Switch to physical addressing (fallback)
+    pub fn switch_to_physical(self: *VGA) void {
+        self.buffer = @as([*]volatile u16, @ptrFromInt(VGA_BUFFER_PHYS_ADDR));
+        self.using_virtual = false;
+    }
+
+    // Switch to virtual addressing
+    pub fn switch_to_virtual(self: *VGA) void {
+        self.buffer = @as([*]volatile u16, @ptrFromInt(VGA_BUFFER_ADDR));
+        self.using_virtual = true;
     }
 
     // Clear the screen
@@ -172,7 +165,6 @@ pub const VGA = struct {
         arch.outb(0x3D4, 0x0F);
         arch.outb(0x3D5, @as(u8, @truncate(pos & 0xFF)));
         arch.outb(0x3D4, 0x0E);
-        // Handle VGA cursor position with explicit type handling
         const pos_u16 = @as(u16, pos);
         const high_byte = @as(u8, @truncate(pos_u16 >> 8));
         arch.outb(0x3D5, high_byte);
@@ -192,13 +184,13 @@ pub const VGA = struct {
         }
     }
     
-    // Test if VGA is working by writing to a specific location and reading back
+    // Simple test to verify VGA is working
     pub fn test_vga_access(self: *VGA) bool {
         // Save original character
         const original = self.buffer[0];
         
         // Write test character
-        self.buffer[0] = vga_entry('A', .White, .Black);
+        self.buffer[0] = vga_entry('T', .White, .Black);
         
         // Small delay
         var i: u32 = 0;
@@ -211,159 +203,16 @@ pub const VGA = struct {
         self.buffer[0] = original;
         
         // Check if test character was written correctly
-        return (read_back & 0xFF) == 'A';
+        return (read_back & 0xFF) == 'T';
     }
     
-    // Enhanced VGA test with multiple test patterns
-    pub fn enhanced_vga_test(self: *VGA) bool {
-        // Test 1: Basic write/read test
-        if (!self.test_vga_access()) {
-            return false;
-        }
-        
-        // Test 2: Multiple location test
-        const test_locations = [_]usize{0, 80, 160, 240, 320};
-        const test_chars = [_]u8{'T', 'E', 'S', 'T', '2'};
-        
-        for (test_locations, 0..) |loc, i| {
-            const original = self.buffer[loc];
-            self.buffer[loc] = vga_entry(test_chars[i], .White, .Black);
-            
-            // Small delay
-            var j: u32 = 0;
-            while (j < 50000) : (j += 1) {}
-            
-            const read_back = self.buffer[loc];
-            self.buffer[loc] = original;
-            
-            if ((read_back & 0xFF) != test_chars[i]) {
-                return false;
-            }
-        }
-        
-        // Test 3: Color test
-        const test_colors = [_]Color{.Red, .Green, .Blue, .Yellow, .Cyan};
-        for (test_colors) |color| {
-            const original = self.buffer[400];
-            self.buffer[400] = vga_entry('C', color, .Black);
-            
-            // Small delay
-            var j: u32 = 0;
-            while (j < 50000) : (j += 1) {}
-            
-            const read_back = self.buffer[400];
-            self.buffer[400] = original;
-            
-            // Check color (upper 8 bits)
-            if ((read_back >> 8) & 0x0F != @as(u8, @intFromEnum(color))) {
-                return false;
-            }
-        }
-        
-        return true;
-    }
-    
-    // Test VGA functionality by writing a test pattern
-    pub fn test_vga(self: *VGA) bool {
-        // Save current state
-        const old_x = self.cursor_x;
-        const old_y = self.cursor_y;
-        const old_fg = self.fg_color;
-        const old_bg = self.bg_color;
-        
-        // Test pattern
-        self.cursor_x = 0;
-        self.cursor_y = 0;
-        self.update_cursor();
-        
-        // Write test characters
-        self.set_color(.White, .Black);
-        self.write_string("VGA TEST: ");
-        
-        self.set_color(.Green, .Black);
-        self.write_string("OK");
-        
-        self.write_byte('\n');
-        
-        // Restore state
-        self.cursor_x = old_x;
-        self.cursor_y = old_y;
-        self.fg_color = old_fg;
-        self.bg_color = old_bg;
-        self.update_cursor();
-        
-        return true;
-    }
-    
-    // Comprehensive test of VGA functionality
-    pub fn comprehensive_test(self: *VGA) bool {
-        // Save current state
-        const old_x = self.cursor_x;
-        const old_y = self.cursor_y;
-        const old_fg = self.fg_color;
-        const old_bg = self.bg_color;
-        
-        // Clear screen
+    // Simple test pattern
+    pub fn test_pattern(self: *VGA) void {
         self.clear_screen();
-        
-        // Test 1: Basic character writing
-        self.cursor_x = 0;
-        self.cursor_y = 0;
         self.set_color(.White, .Black);
-        self.write_string("VGA Test 1: Basic writing");
-        self.write_byte('\n');
-        
-        // Test 2: Color changes
-        self.set_color(.Red, .Black);
-        self.write_string("RED ");
+        self.write_string("VGA Test: OK\n");
         self.set_color(.Green, .Black);
-        self.write_string("GREEN ");
-        self.set_color(.Blue, .Black);
-        self.write_string("BLUE\n");
-        
-        // Test 3: Cursor movement
-        self.cursor_x = 10;
-        self.cursor_y = 5;
-        self.set_color(.Cyan, .Black);
-        self.write_string("Cursor at (10,5)");
-        self.update_cursor();
-        
-        // Test 4: Scrolling
-        self.cursor_y = 20;
-        self.write_string("Testing scroll...\n");
-        for (0..10) |_| {
-            self.write_string("This should cause scrolling\n");
-        }
-        
-        // Test 5: Special characters
-        self.cursor_x = 0;
-        self.cursor_y = 10;
-        self.set_color(.Magenta, .Black);
-        self.write_string("Special chars: ");
-        self.write_byte('\t');
-        self.write_string("TAB");
-        self.write_byte('\r');
-        self.write_string("CR");
-        self.write_byte('\n');
-        
-        // Test 6: Fill screen
-        self.set_color(.Yellow, .Blue);
-        for (0..VGA_HEIGHT) |y| {
-            for (0..VGA_WIDTH) |x| {
-                if (y == 0 or y == VGA_HEIGHT - 1 or x == 0 or x == VGA_WIDTH - 1) {
-                    self.put_char_at(@as(u8, @intCast(x)), @as(u8, @intCast(y)), '#');
-                }
-            }
-        }
-        
-        // Restore state
-        self.cursor_x = old_x;
-        self.cursor_y = old_y;
-        self.fg_color = old_fg;
-        self.bg_color = old_bg;
-        self.update_cursor();
-        
-        return true;
+        self.write_string("System is working\n");
     }
 };
 
@@ -391,9 +240,22 @@ pub fn init() void {
     }
 }
 
+pub fn init_early() void {
+    if (!vga_initialized) {
+        vga_instance = VGA.init_early();
+        vga_initialized = true;
+        
+        // Initialize with a simple test pattern
+        vga_instance.set_color(.LightGrey, .Black);
+        vga_instance.clear_screen();
+        vga_instance.enable_cursor(true);
+        vga_instance.write_string("Early VGA Initialized\n");
+    }
+}
+
 pub fn get_instance() *VGA {
     if (!vga_initialized) {
-        init();
+        init_early(); // Default to early init for safety
     }
     return &vga_instance;
 }
@@ -419,8 +281,22 @@ pub fn set_color(fg: Color, bg: Color) void {
     get_instance().set_color(fg, bg);
 }
 
-// Force reinitialization of VGA (useful for fallback)
-pub fn reinit() void {
-    vga_initialized = false;
-    init();
+// Switch to physical addressing (fallback)
+pub fn switch_to_physical() void {
+    get_instance().switch_to_physical();
+}
+
+// Switch to virtual addressing
+pub fn switch_to_virtual() void {
+    get_instance().switch_to_virtual();
+}
+
+// Test VGA functionality
+pub fn test_vga() bool {
+    return get_instance().test_vga_access();
+}
+
+// Show test pattern
+pub fn test_pattern() void {
+    get_instance().test_pattern();
 }

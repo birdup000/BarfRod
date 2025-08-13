@@ -162,16 +162,18 @@ export fn kmain(multiboot_magic: u32, multiboot_info_addr: u32) callconv(.C) nor
     serial.write("Kernel starting...\n");
 
     // Early VGA initialization (before memory management)
-    var early_vga = vga.VGA.init_early();
-    early_vga.clear_screen();
-    early_vga.set_color(.LightGrey, .Black);
-    early_vga.write_string("BarfRod Kernel Booting...\n");
+    vga.init_early();
+    var early_vga = vga.get_instance();
     
-    // Test early VGA access
-    if (!early_vga.test_vga_access()) {
-        early_vga.set_color(.Red, .Black);
-        early_vga.write_string("ERROR: Early VGA test failed!\n");
-        serial.write("ERROR: Early VGA test failed!\n");
+    // Test if early VGA is working
+    if (!test_vga_minimal()) {
+        // If even the most basic VGA test fails, we have a serious problem
+        serial.write("ERROR: Basic VGA hardware test failed!\n");
+        // Continue anyway, but VGA won't work
+    } else {
+        early_vga.clear_screen();
+        early_vga.set_color(.LightGrey, .Black);
+        early_vga.write_string("BarfRod Kernel Booting...\n");
     }
     
     // Check multiboot magic
@@ -205,24 +207,47 @@ export fn kmain(multiboot_magic: u32, multiboot_info_addr: u32) callconv(.C) nor
     };
 
     // Now reinitialize VGA with proper virtual mapping
-    early_vga.write_string("Setting up VGA with virtual mapping...\n");
-    vga.init();
-    
-    // Test VGA with virtual mapping
-    const vga_instance = vga.get_instance();
-    if (!vga_instance.test_vga_access()) {
-        vga_instance.set_color(.Red, .Black);
-        vga_instance.write_string("ERROR: VGA virtual mapping test failed!\n");
-        serial.write("ERROR: VGA virtual mapping test failed!\n");
+    if (test_vga_minimal()) {
+        early_vga.write_string("Setting up VGA with virtual mapping...\n");
+        vga.init();
+        
+        // Test VGA with virtual mapping
+        const vga_instance = vga.get_instance();
+        if (!vga_instance.test_vga_access()) {
+            vga_instance.set_color(.Red, .Black);
+            vga_instance.write_string("ERROR: VGA virtual mapping test failed!\n");
+            serial.write("ERROR: VGA virtual mapping test failed!\n");
+            // Fall back to physical addressing
+            vga_instance.switch_to_physical();
+            vga_instance.write_string("Falling back to physical addressing...\n");
+            
+            // Test physical addressing
+            if (!vga_instance.test_vga_access()) {
+                vga_instance.set_color(.Red, .Black);
+                vga_instance.write_string("ERROR: VGA physical addressing also failed!\n");
+                serial.write("ERROR: VGA physical addressing also failed!\n");
+                // At this point, VGA is not working, but we'll continue
+            } else {
+                vga_instance.set_color(.Yellow, .Black);
+                vga_instance.write_string("VGA physical addressing working.\n");
+            }
+        } else {
+            vga_instance.set_color(.Green, .Black);
+            vga_instance.write_string("VGA virtual mapping working.\n");
+        }
+        
+        // Clear screen and show initial message
+        vga.clear_screen();
+        vga.set_color(.LightGrey, .Black);
+        vga.vga_write_line("BarfRod Kernel Booting...");
+        
+        // Show a simple boot screen
+        show_simple_boot_screen();
+    } else {
+        // VGA is not working at all
+        serial.write("ERROR: VGA hardware is not responding!\n");
+        // Continue without VGA
     }
-    
-    // Clear screen and show initial message
-    vga.clear_screen();
-    vga.set_color(.LightGrey, .Black);
-    vga.vga_write_line("BarfRod Kernel Booting...");
-    
-    // Show a boot screen
-    show_boot_screen();
 
     vga.set_color(.Cyan, .Black);
     vga.vga_write_line("Initializing Interrupts...");
@@ -475,75 +500,67 @@ fn early_vga_write(s: []const u8) void {
     }
 }
 
-fn show_boot_screen() void {
+// Simple VGA test to verify basic functionality
+fn test_vga_minimal() bool {
+    const vga_buffer = @as([*]volatile u16, @ptrFromInt(0xB8000));
+    
+    // Save original character
+    const original = vga_buffer[0];
+    
+    // Write test character
+    vga_buffer[0] = @as(u16, 'T') | (@as(u16, 0x0F) << 8);
+    
+    // Small delay
+    var i: u32 = 0;
+    while (i < 100000) : (i += 1) {}
+    
+    // Read back
+    const read_back = vga_buffer[0];
+    
+    // Restore original
+    vga_buffer[0] = original;
+    
+    // Check if test character was written correctly
+    return (read_back & 0xFF) == 'T';
+}
+
+fn show_simple_boot_screen() void {
     vga.clear_screen();
     
     print_logo();
 
     vga.set_color(.Green, .Black);
-    const vga_instance = vga.get_instance();
-    vga_instance.cursor_x = 10;
-    vga_instance.cursor_y = 15;
-    vga_instance.update_cursor();
-    vga.vga_write("Booting: [");
+    vga.vga_write_line("System booting...");
     
-    const progress_bar_width = 50;
-    for (0..progress_bar_width) |_| {
+    // Simple progress indicator
+    vga.vga_write("[");
+    for (0..20) |_| {
         vga.vga_write("#");
-        // A small delay to simulate loading
+        // Small delay
         var j: u32 = 0;
-        while (j < 100000) : (j += 1) {}
+        while (j < 50000) : (j += 1) {}
     }
-    
-    vga.vga_write("]");
-    
-    vga.set_color(.LightGrey, .Black);
-    vga_instance.cursor_x = 0;
-    vga_instance.cursor_y = 17;
-    vga_instance.update_cursor();
-    vga.vga_write_line("");
+    vga.vga_write_line("]");
     
     // Test VGA functionality
     vga.set_color(.Cyan, .Black);
-    vga.vga_write_line("Testing VGA functionality...");
-    const test_result = vga_instance.test_vga_access();
-    if (test_result) {
+    vga.vga_write_line("Testing VGA...");
+    
+    if (vga.test_vga()) {
         vga.set_color(.Green, .Black);
-        vga.vga_write_line("VGA Access Test: PASSED");
-        
-        // Run enhanced test
-        vga.vga_write_line("Running enhanced VGA test...");
-        if (vga_instance.enhanced_vga_test()) {
-            vga.set_color(.Green, .Black);
-            vga.vga_write_line("VGA Enhanced Test: PASSED");
-        } else {
-            vga.set_color(.Yellow, .Black);
-            vga.vga_write_line("VGA Enhanced Test: PARTIAL (basic works)");
-        }
-        
-        // Run comprehensive test
-        vga.vga_write_line("Running comprehensive VGA test...");
-        _ = vga_instance.comprehensive_test();
-        
-        vga.set_color(.Green, .Black);
-        vga.vga_write_line("VGA Comprehensive Test: PASSED");
+        vga.vga_write_line("VGA Test: PASSED");
     } else {
         vga.set_color(.Red, .Black);
         vga.vga_write_line("VGA Test: FAILED");
-        
-        // Try to fall back to physical addressing
-        vga_instance.set_color(.Yellow, .Black);
-        vga.vga_write_line("Attempting fallback to physical addressing...");
-        vga_instance.buffer = @as([*]volatile u16, @ptrFromInt(arch.MEMORY_LAYOUT.VGA_BUFFER_PHYS));
-        
-        if (vga_instance.test_vga_access()) {
-            vga_instance.set_color(.Green, .Black);
-            vga.vga_write_line("VGA Physical Access Test: PASSED");
-        } else {
-            vga_instance.set_color(.Red, .Black);
-            vga.vga_write_line("VGA Physical Access Test: FAILED");
-        }
+        vga.set_color(.Yellow, .Black);
+        vga.vga_write_line("Using fallback mode...");
+        vga.switch_to_physical();
     }
+    
+    // Show test pattern
+    vga.set_color(.LightGrey, .Black);
+    vga.vga_write_line("");
+    vga.test_pattern();
 }
 
 // Helper to draw a box on the screen

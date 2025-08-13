@@ -102,7 +102,7 @@ pub const MEMORY_LAYOUT = struct {
     pub const KERNEL_BASE: u64 = 0x00100000; // 1MB
     pub const KERNEL_OFFSET: u64 = 0x00100000; // 1MB
     pub const KERNEL_PHYS_BASE: u64 = 0x00100000;
-    pub const KERNEL_VIRT_BASE: u64 = 0x00100000; // Physical mapping for now
+    pub const KERNEL_VIRT_BASE: u64 = 0xFFFFFFFF80000000; // Higher half kernel
     pub const KERNEL_STACK_SIZE: u64 = 0x10000; // 64KB
     pub const USER_STACK_TOP: u64 = 0x00007FFFFFFFF000;
     pub const USER_STACK_SIZE: u64 = 0x10000; // 64KB
@@ -111,15 +111,15 @@ pub const MEMORY_LAYOUT = struct {
     
     // Hardware addresses mapped in kernel space
     pub const VGA_BUFFER_PHYS: u64 = 0xB8000;
-    pub const VGA_BUFFER_VIRT: u64 = 0xB8000; // Physical mapping for now
+    pub const VGA_BUFFER_VIRT: u64 = 0xFFFFFFFF800B8000; // Mapped in higher half
     pub const VGA_CTRL_REGS_PHYS: u64 = 0x3D4;
-    pub const VGA_CTRL_REGS_VIRT: u64 = 0x3D4; // Physical mapping for now
+    pub const VGA_CTRL_REGS_VIRT: u64 = 0xFFFFFFFF80003D4; // Mapped in higher half
     pub const SERIAL_PORT_PHYS: u64 = 0x3F8;
-    pub const SERIAL_PORT_VIRT: u64 = 0x3F8; // Physical mapping for now
+    pub const SERIAL_PORT_VIRT: u64 = 0xFFFFFFFF800003F8; // Mapped in higher half
     
     // Direct mapping area for physical memory access
-    pub const DIRECT_MAPPING_BASE: u64 = 0x00100000; // Start at kernel base
-    pub const DIRECT_MAPPING_SIZE: u64 = 0x1000000; // 16MB
+    pub const DIRECT_MAPPING_BASE: u64 = 0xFFFF800000000000; // Direct map of all physical memory
+    pub const DIRECT_MAPPING_SIZE: u64 = 0x100000000; // 4GB
 };
 
 // Page size constant for direct access
