@@ -48,7 +48,7 @@ pub const VGA = struct {
         };
         
         vga.clear_screen();
-        vga.enable_cursor(true);
+        vga.enable_cursor();
         return vga;
     }
 
@@ -64,7 +64,7 @@ pub const VGA = struct {
         };
         
         vga.clear_screen();
-        vga.enable_cursor(true);
+        vga.enable_cursor();
         return vga;
     }
 
@@ -167,47 +167,23 @@ pub const VGA = struct {
     pub fn update_cursor(self: *VGA) void {
         const pos = self.cursor_y * VGA_WIDTH + self.cursor_x;
         
-        // Use the correct VGA control register addresses
-        const vga_ctrl_phys = arch.MEMORY_LAYOUT.VGA_CTRL_REGS_PHYS;
-        const vga_ctrl_virt = arch.MEMORY_LAYOUT.VGA_CTRL_REGS_VIRT;
-        
-        // Choose the right address based on current mode
-        const ctrl_addr = if (self.using_virtual) vga_ctrl_virt else vga_ctrl_phys;
-        
-        // Cast to u16 for outb function
-        const ctrl_port = @as(u16, @truncate(ctrl_addr));
-        const ctrl_data_port = @as(u16, @truncate(ctrl_addr + 1));
-        
-        arch.outb(ctrl_port, 0x0F);
-        arch.outb(ctrl_data_port, @as(u8, @truncate(pos & 0xFF)));
-        arch.outb(ctrl_port, 0x0E);
+        // Use ports correctly for VGA control registers
+        arch.outb(0x3D4, 0x0F);
+        arch.outb(0x3D5, @as(u8, @truncate(pos & 0xFF)));
+        arch.outb(0x3D4, 0x0E);
         const pos_u16 = @as(u16, pos);
         const high_byte = @as(u8, @truncate(pos_u16 >> 8));
-        arch.outb(ctrl_data_port, high_byte);
+        arch.outb(0x3D5, high_byte);
     }
 
-    // Enable or disable the hardware cursor
-    pub fn enable_cursor(self: *VGA, enable: bool) void {
-        // Use the correct VGA control register addresses
-        const vga_ctrl_phys = arch.MEMORY_LAYOUT.VGA_CTRL_REGS_PHYS;
-        const vga_ctrl_virt = arch.MEMORY_LAYOUT.VGA_CTRL_REGS_VIRT;
+    // Enable hardware cursor
+    pub fn enable_cursor(self: *VGA) void {
+        _ = self; // Dummy use of self parameter
         
-        // Choose the right address based on current mode
-        const ctrl_addr = if (self.using_virtual) vga_ctrl_virt else vga_ctrl_phys;
-        
-        // Cast to u16 for outb function
-        const ctrl_port = @as(u16, @truncate(ctrl_addr));
-        const ctrl_data_port = @as(u16, @truncate(ctrl_addr + 1));
-        
-        if (enable) {
-            arch.outb(ctrl_port, 0x0A);
-            arch.outb(ctrl_data_port, (arch.inb(ctrl_data_port) & 0xC0) | 14);
-            arch.outb(ctrl_port, 0x0B);
-            arch.outb(ctrl_data_port, (arch.inb(ctrl_data_port) & 0xE0) | @as(u8, 15));
-        } else {
-            arch.outb(ctrl_port, 0x0A);
-            arch.outb(ctrl_data_port, 0x20);
-        }
+        arch.outb(0x3D4, 0x0A);
+        arch.outb(0x3D5, (arch.inb(0x3D5) & 0xC0) | 14);
+        arch.outb(0x3D4, 0x0B);
+        arch.outb(0x3D5, (arch.inb(0x3D5) & 0xE0) | @as(u8, 15));
     }
     
     // Simple test to verify VGA is working
@@ -336,7 +312,7 @@ pub fn init() void {
         // Initialize with a simple test pattern
         vga_instance.set_color(.LightGrey, .Black);
         vga_instance.clear_screen();
-        vga_instance.enable_cursor(true);
+        vga_instance.enable_cursor();
         vga_instance.write_string("VGA Driver Initialized\n");
     }
 }
@@ -349,7 +325,7 @@ pub fn init_early() void {
         // Initialize with a simple test pattern
         vga_instance.set_color(.LightGrey, .Black);
         vga_instance.clear_screen();
-        vga_instance.enable_cursor(true);
+        vga_instance.enable_cursor();
         vga_instance.write_string("Early VGA Initialized\n");
     }
 }

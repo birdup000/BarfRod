@@ -45,31 +45,11 @@ pub fn build(b: *std.Build) void {
 
     // No libc (call takes no args in your Zig; do NOT link libc)
     // We simply avoid calling linkLibC() to keep libc disabled by default.
-    // If present from template, remove any call to linkLibC.
+    // If present from template, remove any call to linkLibC).
 
     // Install kernel ELF
     const install_kernel = b.addInstallArtifact(kernel, .{});
     b.getInstallStep().dependOn(&install_kernel.step);
-
-    // Add raw backend flags to avoid compiler-rt and stack protector emission on this toolchain
-    // On this Zig (snap), prefer root_module.addCSourceFlags/AddArgs equivalents are not exposed.
-    // Use environment variables to set compiler flags
-    const set_env_cmd = b.addSystemCommand(&.{ "bash", "-c",
-        \\export ZIG_GLOBAL_ARGS='-fno-emit-stack-protector -fno-emit-compiler-rt -mcmodel=kernel -mno-red-zone'
-        \\export CFLAGS='-mcmodel=kernel -mno-red-zone'
-        \\export LDFLAGS='-z max-page-size=4096'
-    });
-    
-    // Rebuild kernel with the correct environment
-    const rebuild_cmd = b.addSystemCommand(&.{ "bash", "-c",
-        \\export ZIG_GLOBAL_ARGS='-fno-emit-stack-protector -fno-emit-compiler-rt -mcmodel=kernel -mno-red-zone'
-        \\export CFLAGS='-mcmodel=kernel -mno-red-zone'
-        \\export LDFLAGS='-z max-page-size=4096'
-        \\zig build
-    });
-    
-    set_env_cmd.step.dependOn(&install_kernel.step);
-    rebuild_cmd.step.dependOn(&set_env_cmd.step);
 
     // ISO creation
     const iso_step = b.step("iso", "Build a bootable ISO image with GRUB");

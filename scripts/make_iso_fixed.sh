@@ -1,11 +1,9 @@
 #!/usr/bin/env bash
 set -e
 
-ZIG_BIN="${TOOLCHAIN_ZIG:-./toolchain/zig/zig}"
-
 # Build kernel ELF into zig-out/bin/barfrod
-echo "[barfrod] Building kernel with Zig (${ZIG_BIN})..."
-"${ZIG_BIN}" build
+echo "[barfrod] Using existing build (built on Windows)"
+# zig build
 
 # Prepare ISO root
 ISO_DIR="iso_root"
@@ -40,7 +38,7 @@ grub-mkrescue -o "${OUT_ISO}" "${ISO_DIR}" || {
   echo "Error: ISO creation failed"
   echo "Common issues:"
   echo "1. Missing dependencies (see above)"
-  echo "2. Need sudo permissions for some operations"
+  echo "2. May need additional permissions"
   exit 1
 }
 if [ -f "${OUT_ISO}" ]; then

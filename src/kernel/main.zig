@@ -21,19 +21,19 @@ const MULTIBOOT_HEADER_MAGIC: u32 = 0x1BADB002;
 const MULTIBOOT_HEADER_FLAGS: u32 = 0x00000003;
 const MULTIBOOT_HEADER_CHECKSUM: u32 = ~(MULTIBOOT_HEADER_MAGIC + MULTIBOOT_HEADER_FLAGS) + 1;
 
-// Force Multiboot header to be at start of binary
-export var multiboot_header align(4) linksection(".multiboot") = extern struct {
-    magic: u32 = MULTIBOOT_HEADER_MAGIC,
-    flags: u32 = MULTIBOOT_HEADER_FLAGS,
-    checksum: u32 = MULTIBOOT_HEADER_CHECKSUM,
-}{};
-
-// Force Multiboot2 header to be at start of binary
+// Force Multiboot2 header to be at start of binary  
 export var multiboot2_header align(8) linksection(".multiboot2") = extern struct {
     magic: u32 = MULTIBOOT2_HEADER_MAGIC,
     architecture: u32 = 0, // i386
     header_length: u32 = 24,
     checksum: u32 = MULTIBOOT2_HEADER_CHECKSUM,
+}{};
+
+// Force Multiboot header to be at start of binary
+export var multiboot_header align(4) linksection(".multiboot") = extern struct {
+    magic: u32 = MULTIBOOT_HEADER_MAGIC,
+    flags: u32 = MULTIBOOT_HEADER_FLAGS,
+    checksum: u32 = MULTIBOOT_HEADER_CHECKSUM,
 }{};
 
 // Multiboot info structure
@@ -421,6 +421,17 @@ fn init_cpu_features() void {
     const features = arch.get_cpu_features();
     
     serial.write("cpu: detected features:\n");
+    if (features.fpu) serial.write("  - FPU\n");
+    if (features.vme) serial.write("  - VME\n");
+    if (features.de) serial.write("  - DE\n");
+    if (features.msr) serial.write("  - MSR\n");
+    if (features.pae) serial.write("  - PAE\n");
+    if (features.mce) serial.write("  - MCE\n");
+    if (features.cx8) serial.write("  - CX8\n");
+    if (features.apic) serial.write("  - APIC\n");
+    if (features.mca) serial.write("  - MCA\n");
+    if (features.pge) serial.write("  - PGE\n");
+    if (features.fxsr) serial.write("  - FXSR\n");
     if (features.sse) serial.write("  - SSE\n");
     if (features.sse2) serial.write("  - SSE2\n");
     if (features.sse3) serial.write("  - SSE3\n");
@@ -428,11 +439,12 @@ fn init_cpu_features() void {
     if (features.sse4_1) serial.write("  - SSE4.1\n");
     if (features.sse4_2) serial.write("  - SSE4.2\n");
     if (features.avx) serial.write("  - AVX\n");
+    if (features.xsave) serial.write("  - XSAVE\n");
+    if (features.xsaveopt) serial.write("  - XSAVEOPT\n");
+    if (features.osxsave) serial.write("  - OSXSAVE\n");
     if (features.avx2) serial.write("  - AVX2\n");
     if (features.nx) serial.write("  - NX\n");
     if (features.syscall) serial.write("  - SYSCALL\n");
-    if (features.pae) serial.write("  - PAE\n");
-    if (features.pge) serial.write("  - PGE\n");
     
     // Enable CPU features
     var cr4 = arch.read_cr4();
@@ -824,7 +836,7 @@ export fn handle_syscall(context: *arch.Registers) void {
 }
 
 // Context switch function (called from process manager)
-export fn context_switch(old_context: *arch.Registers, new_context: *arch.Registers) void {
+export fn context_switch(old_context: *arch.Registers, new_context: *arch.Registers) noreturn {
     _ = old_context;
     
     // Switch to new context
