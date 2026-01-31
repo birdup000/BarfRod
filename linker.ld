@@ -4,28 +4,28 @@ ENTRY(_start)
 
 PHDRS
 {
-  text PT_LOAD FLAGS((1 << 0) | (1 << 2));   /* R | X */
-  rodata PT_LOAD FLAGS((1 << 2));            /* R */
-  data PT_LOAD FLAGS((1 << 1) | (1 << 2));   /* R | W */
+  headers PT_LOAD FLAGS((1 << 0) | (1 << 2)); /* R | X - for multiboot headers at file offset 0 */
+  text PT_LOAD FLAGS((1 << 0) | (1 << 2));    /* R | X */
+  rodata PT_LOAD FLAGS((1 << 2));             /* R */
+  data PT_LOAD FLAGS((1 << 1) | (1 << 2));    /* R | W */
 }
 
 SECTIONS
 {
-  /* Start at physical 1MiB for multiboot */
-  . = 1M;
-  
-  /* Multiboot2 header must be at exactly 1MiB */
-  .multiboot2 : {
-    KEEP(*(.multiboot2))
-  } :text
+  /* 
+   * The multiboot2 header MUST be within the first 8192 bytes of the file.
+   * We place it at file offset 0 using AT(), but it will be loaded at 0x100000.
+   */
+  . = 0x100000;
 
-  /* Multiboot header for backward compatibility */
-  .multiboot : {
+  /* Multiboot header - placed at file offset 0 */
+  .multiboot : AT(0) {
     KEEP(*(.multiboot))
-  } :text
+    . = ALIGN(8);
+  } :headers
 
-  /* Text section */
-  .text : {
+  /* Text section - placed after multiboot header in file, at 0x100000+ in memory */
+  .text : AT(SIZEOF(.multiboot)) {
     _text_start = .;
     KEEP(*(.text.boot))
     *(.text .text.*)

@@ -470,26 +470,82 @@ pub const VirtualMemoryManager = struct {
         const FLAG_WRITE_THROUGH = (1 << 3);
         const FLAG_CACHE_DISABLE = (1 << 4);
         
-        // Map VGA buffer with proper flags - use write-through caching for VGA
-        try self.kernel_space.map_page(arch.MEMORY_LAYOUT.VGA_BUFFER_VIRT, arch.MEMORY_LAYOUT.VGA_BUFFER_PHYS, FLAG_PRESENT | FLAG_WRITE | FLAG_WRITE_THROUGH);
-        
-        // Map VGA control registers - use uncached for hardware registers
-        try self.kernel_space.map_page(arch.MEMORY_LAYOUT.VGA_CTRL_REGS_VIRT, arch.MEMORY_LAYOUT.VGA_CTRL_REGS_PHYS, FLAG_PRESENT | FLAG_WRITE | FLAG_CACHE_DISABLE);
-        
-        // Map serial ports - use uncached for hardware registers
-        try self.kernel_space.map_page(arch.MEMORY_LAYOUT.SERIAL_PORT_VIRT, arch.MEMORY_LAYOUT.SERIAL_PORT_PHYS, FLAG_PRESENT | FLAG_WRITE | FLAG_CACHE_DISABLE);
+        // IMPORTANT: Set up direct mapping FIRST so that subsequent map_page calls
+        // can use KERNEL_VIRT_BASE + phys_addr to access allocated page tables
+        serial.write("vmm: setting up direct mapping for physical memory...\n");
         
         // Create direct mapping for physical memory access
-        const direct_map_size = arch.MEMORY_LAYOUT.DIRECT_MAPPING_SIZE;
+        // NOTE: Reduced to 64MB to avoid exhausting PMM during early boot
+        // The full direct mapping will be set up later when more memory is available
+        const direct_map_size: u64 = 64 * 1024 * 1024; // 64MB instead of 4GB
         const direct_map_pages = direct_map_size / PAGE_SIZE;
         var i: usize = 0;
         while (i < direct_map_pages) : (i += 1) {
             const phys_addr = @as(u64, i) * PAGE_SIZE;
             const virt_addr = arch.MEMORY_LAYOUT.DIRECT_MAPPING_BASE + phys_addr;
-            try self.kernel_space.map_page(virt_addr, phys_addr, FLAG_PRESENT | FLAG_WRITE);
+            self.kernel_space.map_page(virt_addr, phys_addr, FLAG_PRESENT | FLAG_WRITE) catch |err| {
+                serial.write("vmm: ERROR - failed to map direct mapping at page ");
+                serial.write_hex(@as(u64, i));
+                serial.write("\n");
+                return err;
+            };
         }
+        serial.write("vmm: direct mapping complete (64MB)\n");
+        
+        // Map VGA buffer with proper flags - use write-through caching for VGA
+        serial.write("vmm: mapping VGA buffer to virtual address ");
+        serial.write_hex(arch.MEMORY_LAYOUT.VGA_BUFFER_VIRT);
+        serial.write(" -> physical ");
+        serial.write_hex(arch.MEMORY_LAYOUT.VGA_BUFFER_PHYS);
+        serial.write("\n");
+        
+        self.kernel_space.map_page(arch.MEMORY_LAYOUT.VGA_BUFFER_VIRT, arch.MEMORY_LAYOUT.VGA_BUFFER_PHYS, FLAG_PRESENT | FLAG_WRITE | FLAG_WRITE_THROUGH) catch |err| {
+            serial.write("vmm: ERROR - failed to map VGA buffer: ");
+            // We can't easily print the error, but we know it failed
+            serial.write("(out of memory or mapping error)\n");
+            return err;
+        };
+        serial.write("vmm: VGA buffer mapped successfully\n");
+        
+        // Note: VGA control registers (0x3D4/0x3D5) are I/O ports, not memory-mapped.
+        // They are accessed via inb/outb instructions, not through memory mapping.
+        // Do NOT attempt to map I/O ports as memory pages - this is invalid.
+        
+        // Map serial ports - use uncached for hardware registers
+        try self.kernel_space.map_page(arch.MEMORY_LAYOUT.SERIAL_PORT_VIRT, arch.MEMORY_LAYOUT.SERIAL_PORT_PHYS, FLAG_PRESENT | FLAG_WRITE | FLAG_CACHE_DISABLE);
+        
+        // Direct mapping was already set up earlier in this function
+        
+        // CRITICAL: Map the kernel itself at higher half virtual address
+        // The kernel is loaded at 0x100000 (1MB) physical and linked at 0xFFFFFFFF80000000
+        serial.write("vmm: mapping kernel to higher half...\n");
+        const kernel_phys_start: u64 = 0x100000; // 1MB
+        const kernel_virt_start: u64 = arch.MEMORY_LAYOUT.KERNEL_VIRT_BASE + kernel_phys_start;
+        const kernel_pages: usize = 256; // Map 1MB of kernel (256 * 4KB = 1MB)
+        
+        var ki: usize = 0;
+        while (ki < kernel_pages) : (ki += 1) {
+            const kpaddr = kernel_phys_start + ki * PAGE_SIZE;
+            const kvaddr = kernel_virt_start + ki * PAGE_SIZE;
+            self.kernel_space.map_page(kvaddr, kpaddr, FLAG_PRESENT | FLAG_WRITE) catch |err| {
+                serial.write("vmm: ERROR - failed to map kernel page ");
+                serial.write_hex(@as(u64, ki));
+                serial.write("\n");
+                return err;
+            };
+        }
+        serial.write("vmm: kernel mapped to higher half\n");
         
         serial.write("vmm: kernel mapping setup complete\n");
+        
+        // Verify VGA mapping by reading back the PML4 entry
+        const pml4_index = (arch.MEMORY_LAYOUT.VGA_BUFFER_VIRT >> 39) & 0x1FF;
+        const pml4_entry = @as(*[512]PageTableEntry, @ptrCast(self.kernel_space.pml4))[pml4_index];
+        serial.write("vmm: VGA PML4 entry present=");
+        serial.write_hex(@as(u64, pml4_entry.present));
+        serial.write(" address=");
+        serial.write_hex(pml4_entry.get_address());
+        serial.write("\n");
     }
     
     pub fn create_address_space(self: *VirtualMemoryManager) !*AddressSpace {
@@ -551,7 +607,17 @@ pub fn init() !void {
     
     try vmm_instance.?.setup_kernel_mapping();
     
-    serial.write("vmm: initialized\n");
+    // Activate the new page tables by switching to kernel address space
+    // This is required for virtual mappings (like VGA buffer) to work
+    const pml4_phys = @intFromPtr(vmm_instance.?.kernel_space.pml4) - arch.MEMORY_LAYOUT.KERNEL_VIRT_BASE;
+    arch.write_cr3(pml4_phys);
+    
+    // CRITICAL: Flush TLB for VGA buffer virtual address after page table switch
+    // Without this, the CPU may still use cached translations
+    arch.invlpg(arch.MEMORY_LAYOUT.VGA_BUFFER_VIRT);
+    serial.write("vmm: TLB flushed for VGA buffer\n");
+    
+    serial.write("vmm: initialized and page tables activated\n");
 }
 
 pub fn get_instance() ?*VirtualMemoryManager {
@@ -563,6 +629,10 @@ pub fn get_kernel_address_space() ?*AddressSpace {
         return instance.kernel_space;
     }
     return null;
+}
+
+pub fn is_initialized() bool {
+    return vmm_instance != null;
 }
 
 // Standalone page fault handler

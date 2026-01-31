@@ -1,5 +1,6 @@
 const std = @import("std");
 const arch = @import("arch.zig");
+const Spinlock = @import("spinlock.zig").Spinlock;
 
 // VGA text mode constants
 pub const VGA_WIDTH = 80;
@@ -35,6 +36,7 @@ pub const VGA = struct {
     fg_color: Color,
     bg_color: Color,
     using_virtual: bool,
+    lock: Spinlock,
 
     // Initialize VGA with physical address (for early boot)
     pub fn init_early() VGA {
@@ -45,6 +47,7 @@ pub const VGA = struct {
             .fg_color = .LightGrey,
             .bg_color = .Black,
             .using_virtual = false,
+            .lock = Spinlock.init(),
         };
         
         vga.clear_screen();
@@ -54,13 +57,17 @@ pub const VGA = struct {
 
     // Initialize the VGA driver with virtual mapping
     pub fn init() VGA {
+        // Check if virtual address is mapped (Issue 2)
+        const buffer_addr = verify_virtual_mapping(VGA_BUFFER_ADDR, VGA_BUFFER_PHYS_ADDR);
+        
         var vga = VGA{
-            .buffer = @as([*]volatile u16, @ptrFromInt(VGA_BUFFER_ADDR)),
+            .buffer = @as([*]volatile u16, @ptrFromInt(buffer_addr)),
             .cursor_x = 0,
             .cursor_y = 0,
             .fg_color = .LightGrey,
             .bg_color = .Black,
-            .using_virtual = true,
+            .using_virtual = buffer_addr == VGA_BUFFER_ADDR,
+            .lock = Spinlock.init(),
         };
         
         vga.clear_screen();
@@ -70,40 +77,74 @@ pub const VGA = struct {
 
     // Switch to physical addressing (fallback)
     pub fn switch_to_physical(self: *VGA) void {
+        self.lock.acquire();
+        defer self.lock.release();
         self.buffer = @as([*]volatile u16, @ptrFromInt(VGA_BUFFER_PHYS_ADDR));
         self.using_virtual = false;
         // Re-initialize cursor after switching
-        self.update_cursor();
+        self.update_cursor_internal();
     }
 
     // Switch to virtual addressing
     pub fn switch_to_virtual(self: *VGA) void {
+        self.lock.acquire();
+        defer self.lock.release();
+        
+        // Log the switch attempt
+        const serial = @import("serial.zig");
+        serial.write("vga: switching to virtual addressing at ");
+        serial.write_hex(VGA_BUFFER_ADDR);
+        serial.write("\n");
+        
         self.buffer = @as([*]volatile u16, @ptrFromInt(VGA_BUFFER_ADDR));
         self.using_virtual = true;
+        
+        // Test write to verify virtual mapping works
+        const test_char = vga_entry('V', .White, .Black);
+        self.buffer[0] = test_char;
+        
+        // Read back to verify
+        const read_back = self.buffer[0];
+        if ((read_back & 0xFF) == 'V') {
+            serial.write("vga: virtual mapping test PASSED\n");
+        } else {
+            serial.write("vga: virtual mapping test FAILED - read back: ");
+            serial.write_hex(read_back);
+            serial.write("\n");
+        }
+        
         // Re-initialize cursor after switching
-        self.update_cursor();
+        self.update_cursor_internal();
     }
 
     // Clear the screen
     pub fn clear_screen(self: *VGA) void {
+        self.lock.acquire();
+        defer self.lock.release();
         const entry = vga_entry(' ', self.fg_color, self.bg_color);
         for (0..(VGA_WIDTH * VGA_HEIGHT)) |i| {
             self.buffer[i] = entry;
         }
         self.cursor_x = 0;
         self.cursor_y = 0;
-        self.update_cursor();
+        self.update_cursor_internal();
     }
 
     // Set the foreground and background colors
     pub fn set_color(self: *VGA, fg: Color, bg: Color) void {
+        self.lock.acquire();
+        defer self.lock.release();
         self.fg_color = fg;
         self.bg_color = bg;
     }
 
-    // Put a character at a specific location
+    // Put a character at a specific location (Issue 13: Add bounds checking)
     fn put_char_at(self: *VGA, x: u8, y: u8, char: u8) void {
-        const index = y * VGA_WIDTH + x;
+        // Validate coordinates
+        if (x >= VGA_WIDTH or y >= VGA_HEIGHT) {
+            return; // Out of bounds, ignore
+        }
+        const index = @as(usize, y) * VGA_WIDTH + x;
         self.buffer[index] = vga_entry(char, self.fg_color, self.bg_color);
     }
 
@@ -124,10 +165,14 @@ pub const VGA = struct {
             self.buffer[i] = blank;
         }
         self.cursor_y = VGA_HEIGHT - 1;
+        self.cursor_x = 0; // Issue 5: Reset cursor_x after scrolling
     }
 
     // Write a single byte/character to the screen
     pub fn write_byte(self: *VGA, byte: u8) void {
+        self.lock.acquire();
+        defer self.lock.release();
+        
         switch (byte) {
             '\n' => {
                 self.cursor_x = 0;
@@ -137,11 +182,13 @@ pub const VGA = struct {
                 self.cursor_x = 0;
             },
             '\t' => {
-                const TAB_WIDTH = 4;
-                self.cursor_x = (self.cursor_x + TAB_WIDTH) & ~@as(u8, TAB_WIDTH - 1);
+                // Issue 4: Fix tab calculation overflow
+                const TAB_WIDTH: u8 = 4;
+                const next_tab = (self.cursor_x / TAB_WIDTH + 1) * TAB_WIDTH;
+                self.cursor_x = if (next_tab < VGA_WIDTH) next_tab else VGA_WIDTH - 1;
             },
             else => {
-                self.put_char_at(self.cursor_x, self.cursor_y, byte);
+                self.put_char_at_internal(self.cursor_x, self.cursor_y, byte);
                 self.cursor_x += 1;
             },
         }
@@ -151,9 +198,9 @@ pub const VGA = struct {
             self.cursor_y += 1;
         }
         if (self.cursor_y >= VGA_HEIGHT) {
-            self.scroll();
+            self.scroll_internal();
         }
-        self.update_cursor();
+        self.update_cursor_internal();
     }
 
     // Write a string to the screen
@@ -163,22 +210,62 @@ pub const VGA = struct {
         }
     }
 
-    // Update the hardware cursor position
-    pub fn update_cursor(self: *VGA) void {
-        const pos = self.cursor_y * VGA_WIDTH + self.cursor_x;
+    // Internal version of put_char_at without locking (for use within locked context)
+    fn put_char_at_internal(self: *VGA, x: u8, y: u8, char: u8) void {
+        // Validate coordinates (Issue 13)
+        if (x >= VGA_WIDTH or y >= VGA_HEIGHT) {
+            return;
+        }
+        const index = @as(usize, y) * VGA_WIDTH + x;
+        self.buffer[index] = vga_entry(char, self.fg_color, self.bg_color);
+    }
+
+    // Internal version of scroll without locking (for use within locked context)
+    fn scroll_internal(self: *VGA) void {
+        // Shift all lines up by one
+        for (1..VGA_HEIGHT) |y| {
+            for (0..VGA_WIDTH) |x| {
+                const index = y * VGA_WIDTH + x;
+                const prev_index = (y - 1) * VGA_WIDTH + x;
+                self.buffer[prev_index] = self.buffer[index];
+            }
+        }
+        // Clear the last line
+        const blank = vga_entry(' ', self.fg_color, self.bg_color);
+        const last_line_start = (VGA_HEIGHT - 1) * VGA_WIDTH;
+        for (last_line_start..(last_line_start + VGA_WIDTH)) |i| {
+            self.buffer[i] = blank;
+        }
+        self.cursor_y = VGA_HEIGHT - 1;
+        self.cursor_x = 0; // Issue 5: Reset cursor_x after scrolling
+    }
+
+    // Internal version of update_cursor without locking (for use within locked context)
+    fn update_cursor_internal(self: *VGA) void {
+        // Issue 3: Validate cursor position before updating registers
+        if (self.cursor_x >= VGA_WIDTH) self.cursor_x = VGA_WIDTH - 1;
+        if (self.cursor_y >= VGA_HEIGHT) self.cursor_y = VGA_HEIGHT - 1;
+        
+        const pos = @as(u16, self.cursor_y) * VGA_WIDTH + @as(u16, self.cursor_x);
         
         // Use ports correctly for VGA control registers
         arch.outb(0x3D4, 0x0F);
         arch.outb(0x3D5, @as(u8, @truncate(pos & 0xFF)));
         arch.outb(0x3D4, 0x0E);
-        const pos_u16 = @as(u16, pos);
-        const high_byte = @as(u8, @truncate(pos_u16 >> 8));
-        arch.outb(0x3D5, high_byte);
+        arch.outb(0x3D5, @as(u8, @truncate(pos >> 8)));
+    }
+
+    // Update the hardware cursor position (public version with locking)
+    pub fn update_cursor(self: *VGA) void {
+        self.lock.acquire();
+        defer self.lock.release();
+        self.update_cursor_internal();
     }
 
     // Enable hardware cursor
     pub fn enable_cursor(self: *VGA) void {
-        _ = self; // Dummy use of self parameter
+        self.lock.acquire();
+        defer self.lock.release();
         
         arch.outb(0x3D4, 0x0A);
         arch.outb(0x3D5, (arch.inb(0x3D5) & 0xC0) | 14);
@@ -188,6 +275,9 @@ pub const VGA = struct {
     
     // Simple test to verify VGA is working
     pub fn test_vga_access(self: *VGA) bool {
+        self.lock.acquire();
+        defer self.lock.release();
+        
         // Save original character
         const original = self.buffer[0];
         
@@ -219,6 +309,9 @@ pub const VGA = struct {
     
     // More comprehensive test for VGA functionality
     pub fn comprehensive_test(self: *VGA) bool {
+        self.lock.acquire();
+        defer self.lock.release();
+        
         var success = true;
         
         // Test 1: Basic character write/read
@@ -294,45 +387,66 @@ pub const VGA = struct {
 };
 
 // Helper to create a 16-bit VGA entry
-fn vga_entry(char: u8, fg: Color, bg: Color) u16 {
+pub fn vga_entry(char: u8, fg: Color, bg: Color) u16 {
     const color = @as(u8, @intFromEnum(fg)) | (@as(u8, @intFromEnum(bg)) << 4);
     return @as(u16, char) | (@as(u16, color) << 8);
 }
 
 // Global instance of the VGA driver
 var vga_instance: VGA = undefined;
-var vga_initialized = false;
+var vga_initialized: bool = false;
+var init_lock: Spinlock = Spinlock.init(); // Issue 7: Lock for race condition prevention
+
+// Issue 8: Use atomic operations for vga_initialized
+fn is_vga_initialized() bool {
+    return @atomicLoad(bool, &vga_initialized, .acquire);
+}
+
+fn set_vga_initialized(value: bool) void {
+    @atomicStore(bool, &vga_initialized, value, .release);
+}
+
+// Verify virtual address mapping (Issue 2)
+fn verify_virtual_mapping(virt_addr: u64, fallback_phys: u64) u64 {
+    // Try to safely check if virtual address is mapped
+    // In a real implementation, this would check page tables
+    // For now, we attempt a read and fall back on page fault
+    // A safer approach is to check if VMM is initialized
+    const vmm = @import("vmm.zig");
+    if (vmm.is_initialized()) {
+        return virt_addr;
+    }
+    return fallback_phys;
+}
 
 // Public interface
 pub fn init() void {
-    if (!vga_initialized) {
-        vga_instance = VGA.init();
-        vga_initialized = true;
+    if (!is_vga_initialized()) {
+        init_lock.acquire();
+        defer init_lock.release();
         
-        // Initialize with a simple test pattern
-        vga_instance.set_color(.LightGrey, .Black);
-        vga_instance.clear_screen();
-        vga_instance.enable_cursor();
-        vga_instance.write_string("VGA Driver Initialized\n");
+        if (!is_vga_initialized()) {
+            vga_instance = VGA.init();
+            set_vga_initialized(true);
+        }
     }
 }
 
 pub fn init_early() void {
-    if (!vga_initialized) {
-        vga_instance = VGA.init_early();
-        vga_initialized = true;
-        
-        // Initialize with a simple test pattern
-        vga_instance.set_color(.LightGrey, .Black);
-        vga_instance.clear_screen();
-        vga_instance.enable_cursor();
-        vga_instance.write_string("Early VGA Initialized\n");
-    }
+    // Simple initialization without locks for early boot
+    vga_instance = VGA.init_early();
+    set_vga_initialized(true);
 }
 
 pub fn get_instance() *VGA {
-    if (!vga_initialized) {
-        init_early(); // Default to early init for safety
+    // Issue 7: Double-checked locking pattern for race safety with atomics
+    if (!is_vga_initialized()) {
+        init_lock.acquire();
+        defer init_lock.release();
+        
+        if (!is_vga_initialized()) {
+            init_early(); // Default to early init for safety
+        }
     }
     return &vga_instance;
 }

@@ -13,28 +13,44 @@ const vga = @import("vga.zig");
 
 // Multiboot2 header constants
 const MULTIBOOT2_HEADER_MAGIC: u32 = 0xE85250D6;
-const MULTIBOOT2_HEADER_FLAGS: u32 = 0x00000003;
-const MULTIBOOT2_HEADER_CHECKSUM: u32 = ~(MULTIBOOT2_HEADER_MAGIC + MULTIBOOT2_HEADER_FLAGS) + 1;
+const MULTIBOOT2_ARCH: u32 = 0; // i386 (x86)
 
-// Multiboot header constants (for backward compatibility)
-const MULTIBOOT_HEADER_MAGIC: u32 = 0x1BADB002;
-const MULTIBOOT_HEADER_FLAGS: u32 = 0x00000003;
-const MULTIBOOT_HEADER_CHECKSUM: u32 = ~(MULTIBOOT_HEADER_MAGIC + MULTIBOOT_HEADER_FLAGS) + 1;
+// Multiboot2 header structure (72 bytes total = 18 u32s):
+// - Fixed header: 16 bytes (magic, arch, length, checksum)
+// - Information request tag: 24 bytes (type=1, flags, size, 4 requests)
+// - Address tag: 24 bytes (type=2, flags, size, load_addr, load_end_addr, bss_end_addr, padding)
+// - Header end tag: 8 bytes (type=0, flags, size)
+const MULTIBOOT2_HEADER_LENGTH: u32 = 72;
 
-// Force Multiboot2 header to be at start of binary  
-export var multiboot2_header align(8) linksection(".multiboot2") = extern struct {
-    magic: u32 = MULTIBOOT2_HEADER_MAGIC,
-    architecture: u32 = 0, // i386
-    header_length: u32 = 24,
-    checksum: u32 = MULTIBOOT2_HEADER_CHECKSUM,
-}{};
+// Calculate checksum: -(magic + architecture + header_length)
+const MULTIBOOT2_CHECKSUM_BASE: u32 = MULTIBOOT2_HEADER_MAGIC + MULTIBOOT2_ARCH + MULTIBOOT2_HEADER_LENGTH;
+const MULTIBOOT2_HEADER_CHECKSUM: u32 = (~MULTIBOOT2_CHECKSUM_BASE) + 1;
 
-// Force Multiboot header to be at start of binary
-export var multiboot_header align(4) linksection(".multiboot") = extern struct {
-    magic: u32 = MULTIBOOT_HEADER_MAGIC,
-    flags: u32 = MULTIBOOT_HEADER_FLAGS,
-    checksum: u32 = MULTIBOOT_HEADER_CHECKSUM,
-}{};
+// Multiboot2 header - minimal for ELF files
+// For ELF, GRUB reads addresses from program headers, so no address tag needed
+// Total size: 48 bytes (12 u32s)
+const MB2_HEADER_LEN: u32 = 48;
+const MB2_CHECKSUM: u32 = (~(MULTIBOOT2_HEADER_MAGIC + MULTIBOOT2_ARCH + MB2_HEADER_LEN)) + 1;
+
+export var multiboot2_header align(8) linksection(".multiboot") = [12]u32{
+    // Fixed header (16 bytes = 4 u32s)
+    MULTIBOOT2_HEADER_MAGIC,      // magic: 0xE85250D6
+    MULTIBOOT2_ARCH,              // architecture: 0 (i386)
+    MB2_HEADER_LEN,               // header length: 48
+    MB2_CHECKSUM,                 // checksum
+    
+    // Information request tag (24 bytes = 6 u32s) - type=1
+    0x00000001,                   // type=1, flags=0
+    24,                           // size
+    1,                            // request: cmdline
+    2,                            // request: bootloader name
+    4,                            // request: basic mem info
+    6,                            // request: mmap
+    
+    // Header end tag (8 bytes = 2 u32s) - type=0
+    0x00000000,                   // type=0, flags=0
+    8,                            // size
+};
 
 // Multiboot info structure
 const MultibootInfo = extern struct {
@@ -162,8 +178,11 @@ export fn kmain(multiboot_magic: u32, multiboot_info_addr: u32) callconv(.C) nor
     serial.write("Kernel starting...\n");
 
     // Initialize early VGA with physical addressing (before memory management)
+    serial.write("main: calling vga.init_early()...\n");
     vga.init_early();
+    serial.write("main: getting VGA instance...\n");
     var early_vga = vga.get_instance();
+    serial.write("main: got VGA instance, testing...\n");
     
     // Test if early VGA is working
     if (!test_vga_with_diagnostics()) {
@@ -171,16 +190,23 @@ export fn kmain(multiboot_magic: u32, multiboot_info_addr: u32) callconv(.C) nor
         serial.write("ERROR: VGA hardware diagnostic test failed!\n");
         // Continue anyway, but VGA won't work
     } else {
+        serial.write("main: VGA diagnostics passed, clearing screen...\n");
         early_vga.clear_screen();
+        serial.write("main: writing initial message to VGA...\n");
         early_vga.set_color(.LightGrey, .Black);
         early_vga.write_string("BarfRod Kernel Booting...\n");
+        serial.write("main: initial VGA message written\n");
     }
     
-    // Check multiboot magic
-    if (multiboot_magic != 0x2BADB002 and multiboot_magic != 0xE85250D6) {
+    // Check multiboot2 magic (passed in EAX by bootloader)
+    // Multiboot2 magic is 0x36d76289
+    const MULTIBOOT2_BOOTLOADER_MAGIC: u32 = 0x36d76289;
+    if (multiboot_magic != MULTIBOOT2_BOOTLOADER_MAGIC) {
         early_vga.set_color(.Red, .Black);
         early_vga.write_string("ERROR: Invalid multiboot magic!\n");
-        serial.write("ERROR: Invalid multiboot magic!\n");
+        serial.write("ERROR: Invalid multiboot magic! Expected: 0x");
+        serial.write_hex(MULTIBOOT2_BOOTLOADER_MAGIC);
+        serial.write(", Got: 0x");
         serial.write_hex(multiboot_magic);
         serial.write("\n");
         while (true) arch.halt();
@@ -200,6 +226,7 @@ export fn kmain(multiboot_magic: u32, multiboot_info_addr: u32) callconv(.C) nor
     pmm.get_instance().setup(memory_map);
 
     // Initialize VMM
+    serial.write("main: initializing VMM...\n");
     early_vga.write_string("Initializing VMM...\n");
     vmm.init() catch {
         early_vga.set_color(.Red, .Black);
@@ -207,10 +234,15 @@ export fn kmain(multiboot_magic: u32, multiboot_info_addr: u32) callconv(.C) nor
         serial.write("FATAL: VMM initialization failed!\n");
         arch.halt();
     };
+    serial.write("main: VMM initialized successfully\n");
 
     // Now reinitialize VGA with proper virtual mapping
+    // Issue 11: Removed redundant vga.init() call since init_early() already initialized VGA
+    // Instead, we switch to virtual addressing using the existing instance
+    serial.write("main: switching VGA to virtual addressing...\n");
     early_vga.write_string("Setting up VGA with virtual mapping...\n");
-    vga.init();
+    early_vga.switch_to_virtual();
+    serial.write("main: VGA switch to virtual complete\n");
     
     // Test VGA with virtual mapping
     const vga_instance = vga.get_instance();
@@ -480,47 +512,103 @@ fn scancode_to_ascii(scancode: u8) u8 {
     return 0;
 }
 
-// Kernel entry point
-export fn _start() callconv(.C) noreturn {
-    // Setup stack with static buffer (16-byte aligned)
-    const STACK_SIZE = 16 * 1024; // 16KB stack
-    var stack: [STACK_SIZE]u8 align(16) = undefined;
-    asm volatile (
-        \\mov %[stack_end], %%rsp
-        :
-        : [stack_end] "r" (@intFromPtr(&stack) + STACK_SIZE)
-        : "rsp"
-    );
+// Stack for early boot - must be static to avoid stack allocation
+// This is placed in .bss and referenced before memory management is set up
+var early_stack: [16384]u8 align(16) = undefined; // 16KB stack
 
-    // Get multiboot information from stack
-    var multiboot_magic: u32 = undefined;
-    var multiboot_info_addr: u32 = undefined;
+// ULTRA-EARLY VGA output - no initialization required
+// This runs BEFORE anything else to prove VGA hardware works
+fn ultra_early_vga_test() void {
+    // Direct pointer to VGA buffer at physical address
+    // In x86_64 with identity mapping (from bootloader), 0xB8000 is accessible
+    const vga_buf = @as([*]volatile u16, @ptrFromInt(0xB8000));
     
-    asm volatile (
-        \\mov %%ebx, %[magic]
-        \\mov %%eax, %[info]
-        : [magic] "=r" (multiboot_magic),
-          [info] "=r" (multiboot_info_addr)
-    );
-
-    // Call the main kernel function with multiboot info
-    kmain(multiboot_magic, multiboot_info_addr);
+    // Write "KERNEL OK!" in white-on-black
+    // Format: ASCII byte first, then attribute byte (0x0F = white on black)
+    const msg = "KERNEL OK!";
+    const attr: u16 = 0x0F00; // White on black, in high byte
+    
+    var i: usize = 0;
+    while (i < msg.len) : (i += 1) {
+        vga_buf[i] = @as(u16, msg[i]) | attr;
+    }
 }
 
-// Simple early VGA write function for debugging
+// Kernel entry point - sets up stack and calls kmain
+// NOTE: When GRUB loads us via multiboot2, it starts us in 32-bit protected mode
+// We need to transition to 64-bit long mode before calling kmain
+export fn _start() callconv(.Naked) noreturn {
+    asm volatile (
+        // Force 32-bit code generation since GRUB starts us in 32-bit mode
+        \\.code32
+        
+        // Write 'A' to serial to show we're alive
+        \\movl $0x3F8, %edx
+        \\movb $0x41, %al
+        \\outb %al, %dx
+        
+        // Set up temporary stack in 32-bit mode
+        // Load address of early_stack + 16384 (top of stack) into ESP
+        // We use movl with an immediate and add to it
+        \\movl $0x100000, %esp       // Start with base address (will be fixed by linker)
+        \\addl $0x2A440, %esp        // Add offset to get to early_stack + 16384
+        
+        // Save multiboot info (in EBX) on stack before we clobber it
+        \\pushl %ebx
+        
+        // Enable PAE (Physical Address Extension) - required for long mode
+        \\movl %cr4, %eax
+        \\orl $0x20, %eax           // Set PAE bit (bit 5)
+        \\movl %eax, %cr4
+        
+        // Pop multiboot info back to EBX
+        \\popl %ebx
+        
+        // Write 'B' to serial
+        \\movb $0x42, %al
+        \\outb %al, %dx
+        
+        // Write "HI" to VGA
+        \\movl $0xB8000, %edi
+        \\movw $0x0F48, (%edi)       // 'H' in white-on-black
+        \\movw $0x0F49, 2(%edi)      // 'I' in white-on-black
+        
+        // Write 'C' to serial
+        \\movb $0x43, %al
+        \\outb %al, %dx
+        
+        // Halt for now - we need to implement proper long mode transition
+        \\cli
+        \\1: hlt
+        \\jmp 1b
+    );
+}
+
+// Simple early VGA write function for debugging (Issue 9: Add bounds check)
 fn early_vga_write(s: []const u8) void {
     // Direct write to VGA buffer at physical address
     const vga_buffer = @as([*]volatile u16, @ptrFromInt(0xB8000));
+    const VGA_BUFFER_SIZE = 80 * 25;
     var i: usize = 0;
     var pos: usize = 0;
     
-    while (i < s.len and pos < 80 * 25) : (i += 1) {
+    while (i < s.len and pos < VGA_BUFFER_SIZE) : (i += 1) {
         const c = s[i];
         if (c == '\n') {
-            pos = (pos / 80 + 1) * 80;
+            pos = ((pos / 80) + 1) * 80;
+            if (pos >= VGA_BUFFER_SIZE) break; // Bounds check after newline
+        } else if (c >= 32 and c <= 126) { // Only printable ASCII
+            if (pos < VGA_BUFFER_SIZE) {
+                vga_buffer[pos] = @as(u16, c) | (@as(u16, 0x0F) << 8); // White on black
+                pos += 1;
+            }
         } else {
-            vga_buffer[pos] = @as(u16, c) | (@as(u16, 0x0F) << 8); // White on black
-            pos += 1;
+            // Handle other characters (tab, etc.) or skip
+            if (c == '\t') {
+                const TAB_WIDTH: usize = 4;
+                const next_tab = ((pos / TAB_WIDTH) + 1) * TAB_WIDTH;
+                pos = if (next_tab < VGA_BUFFER_SIZE) next_tab else VGA_BUFFER_SIZE;
+            }
         }
     }
 }
@@ -560,28 +648,34 @@ fn test_vga_with_diagnostics() bool {
     serial.write("VGA: Buffer test passed\n");
     
     // Test 2: Check VGA control registers
+    // Issue 6: Fix I/O port access - use arch.outb/arch.inb instead of memory pointers
     serial.write("VGA: Testing control registers...\n");
     
-    // Try to read from VGA control registers
-    const ctrl_reg = @as([*]volatile u8, @ptrFromInt(0x3D4));
-    const data_reg = @as([*]volatile u8, @ptrFromInt(0x3D5));
+    // VGA ports 0x3D4/0x3D5 are I/O ports, not memory-mapped
+    const VGA_CTRL_PORT: u16 = 0x3D4;
+    const VGA_DATA_PORT: u16 = 0x3D5;
     
     // Save original values
-    const orig_idx = ctrl_reg[0];
-    const orig_data = data_reg[0];
+    arch.outb(VGA_CTRL_PORT, 0x0F);
+    const orig_low = arch.inb(VGA_DATA_PORT);
+    arch.outb(VGA_CTRL_PORT, 0x0E);
+    const orig_high = arch.inb(VGA_DATA_PORT);
     
-    // Test writing and reading cursor position
-    ctrl_reg[0] = 0x0F; // Cursor low byte index
-    data_reg[0] = 0x42; // Test value
-    const read_low = data_reg[0];
+    // Test writing and reading cursor position (low byte)
+    arch.outb(VGA_CTRL_PORT, 0x0F); // Cursor low byte index
+    arch.outb(VGA_DATA_PORT, 0x42); // Test value
+    const read_low = arch.inb(VGA_DATA_PORT);
     
-    ctrl_reg[0] = 0x0E; // Cursor high byte index
-    data_reg[0] = 0x24; // Test value
-    const read_high = data_reg[0];
+    // Test writing and reading cursor position (high byte)
+    arch.outb(VGA_CTRL_PORT, 0x0E); // Cursor high byte index
+    arch.outb(VGA_DATA_PORT, 0x24); // Test value
+    const read_high = arch.inb(VGA_DATA_PORT);
     
     // Restore original values
-    ctrl_reg[0] = orig_idx;
-    data_reg[0] = orig_data;
+    arch.outb(VGA_CTRL_PORT, 0x0F);
+    arch.outb(VGA_DATA_PORT, orig_low);
+    arch.outb(VGA_CTRL_PORT, 0x0E);
+    arch.outb(VGA_DATA_PORT, orig_high);
     
     if (read_low != 0x42 or read_high != 0x24) {
         serial.write("VGA: Control register test failed\n");
@@ -691,21 +785,19 @@ fn draw_box(x1: u8, y1: u8, x2: u8, y2: u8, color: vga.Color) void {
     }
 }
 
-// Helper to put a character at a specific location
+// Helper to put a character at a specific location (Issue 10: Add bounds checking)
 fn put_char_at(x: u8, y: u8, char: u8) void {
+    // Validate coordinates
+    if (x >= vga.VGA_WIDTH or y >= vga.VGA_HEIGHT) {
+        return; // Out of bounds, ignore
+    }
     const vga_instance = vga.get_instance();
-    const index = y * vga.VGA_WIDTH + x;
-    const entry = vga_entry(char, vga_instance.fg_color, vga_instance.bg_color);
+    const index = @as(usize, y) * vga.VGA_WIDTH + x;
+    const entry = vga.vga_entry(char, vga_instance.fg_color, vga_instance.bg_color);
     vga_instance.buffer[index] = entry;
 }
 
-// Helper to create a 16-bit VGA entry
-fn vga_entry(char: u8, fg: vga.Color, bg: vga.Color) u16 {
-    const color = @intFromEnum(fg) | (@intFromEnum(bg) << 4);
-    return @as(u16, char) | (@as(u16, color) << 8);
-}
-
-// This function is no longer needed as we can directly access the VGA instance
+// Issue 12: Removed duplicate vga_entry function - using the one from vga.zig instead
 
 // Assembly interrupt wrappers
 export fn exception_wrapper() callconv(.Naked) void {
